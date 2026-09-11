@@ -1,0 +1,464 @@
+"""组装机会：策略命中 → Thesis → 评分 → Opportunity + 待确认 + 状态 + 提醒。
+
+**这是「同一家公司可以对应多个 Thesis」的实现**（规格 §5.7）：
+对每一类**已实现**的策略分别评估，通过门槛的各自生成一条 Opportunity，
+唯一键 ``(company_id, profile_id, thesis_id)`` 保证幂等。
+
+门槛（可调）::
+
+    coverage  ≥ 0.35   逻辑强度：核心条件至少要命中三分之一以上
+    match     ≥ 30     相关性：与用户画像无关的策略不产出卡片
+
+两条都不能省：只看 coverage 会把「逻辑很强但用户不关心」的机会塞进来；
+只看 match 会让「用户关心但逻辑很弱」的噪声进来。
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import datetime, timezone
+
+from sqlmodel import Session, delete, select
+
+from app.engine import guard
+from app.engine.rules import severity_label
+from app.engine.scoring import (
+    compute_divergence,
+    compute_rule_score,
+    is_divergence_flagged,
+    profile_weight_ratio,
+)
+from app.facts import StrategyFacts
+from app.models.enums import (
+    EventType,
+    OpportunityStatus,
+    ScoreDimension,
+    ScoreSource,
+    ThesisType,
+)
+from app.models.opportunity import (
+    Alert,
+    OpenQuestion,
+    Opportunity,
+    OpportunityScore,
+    OpportunityStatusLog,
+    ScoreItem,
+)
+from app.models.thesis import Thesis
+from app.pipeline import facts_builder
+from app.pipeline.event_writer import facts_after_write
+from app.strategies import STRATEGIES, get_def, get_strategy, implemented_types
+from app.strategies.base import NotImplementedStrategy, StrategyEvaluation
+
+#: 逻辑强度门槛
+MIN_COVERAGE = 0.35
+#: 与用户画像的相关性门槛
+MIN_MATCH = 30.0
+#: 计入「风险」列表的最低严重度
+RISK_LIST_THRESHOLD = 0.40
+
+
+@dataclass
+class OpportunityBuildResult:
+    thesis_type: str
+    created: bool
+    opportunity_id: int | None = None
+    coverage: float = 0.0
+    match_score: float | None = None
+    rule_score: float | None = None
+    risk_score: float | None = None
+    status: str | None = None
+    reason: str = ""
+    invalidated: bool = False
+
+
+# --------------------------------------------------------------------------- #
+def build_opportunities(
+    session: Session,
+    company_id: int,
+    profile_id: int,
+    profile_weights: dict[str, float],
+    *,
+    dry_run: bool = False,
+    commit: bool = True,
+) -> tuple[OpportunityBuildResult, ...]:
+    """为一家公司生成/更新全部符合门槛的机会。"""
+    facts = facts_builder.build_strategy_facts(session, company_id)
+    results: list[OpportunityBuildResult] = []
+
+    for code in implemented_types():
+        strategy = get_strategy(code)
+        if isinstance(strategy, NotImplementedStrategy):  # pragma: no cover - 防御
+            continue
+
+        evaluation: StrategyEvaluation = strategy.evaluate(facts)
+        ratio = profile_weight_ratio(profile_weights, code.value)
+
+        open_questions = strategy.open_questions(facts)
+        facts_with_questions = facts_builder.with_open_question_count(facts, len(open_questions))
+
+        coverage = evaluation.coverage
+        if coverage < MIN_COVERAGE:
+            results.append(OpportunityBuildResult(
+                thesis_type=code.value, created=False, coverage=coverage,
+                reason=f"核心条件覆盖 {coverage:.2f} < {MIN_COVERAGE}（逻辑强度不足）",
+            ))
+            continue
+
+        match_score = compute_rule_score(
+            facts_with_questions, code.value, ratio, evaluation=evaluation
+        ).match_score
+        if match_score < MIN_MATCH:
+            results.append(OpportunityBuildResult(
+                thesis_type=code.value, created=False, coverage=coverage,
+                match_score=match_score,
+                reason=f"匹配度 {match_score:.0f} < {MIN_MATCH}（与用户画像相关性不足）",
+            ))
+            continue
+
+        results.append(
+            _build_one(
+                session, company_id, profile_id, code.value, facts_with_questions,
+                evaluation, ratio, open_questions, dry_run=dry_run, commit=commit,
+            )
+        )
+
+    return tuple(results)
+
+
+# --------------------------------------------------------------------------- #
+def _build_one(
+    session: Session,
+    company_id: int,
+    profile_id: int,
+    thesis_type: str,
+    facts: StrategyFacts,
+    evaluation: StrategyEvaluation,
+    ratio: float,
+    open_questions: tuple[str, ...],
+    *,
+    dry_run: bool,
+    commit: bool,
+) -> OpportunityBuildResult:
+    strategy = get_strategy(thesis_type)
+    definition = get_def(thesis_type)
+
+    invalidation_hits = strategy.invalidation_hits(facts)  # type: ignore[attr-defined]
+    from app.strategies.restructuring import invalidation as restructuring_invalidation
+
+    should_invalidate = (
+        restructuring_invalidation.should_invalidate(invalidation_hits)
+        if thesis_type == ThesisType.RESTRUCTURING.value
+        else bool(invalidation_hits)
+    )
+
+    score = compute_rule_score(
+        facts, thesis_type, ratio, evaluation=evaluation, invalidation_hits=invalidation_hits
+    )
+
+    supporting = _supporting_evidence_ids(facts, evaluation)
+    why_in_radar = [c.label for c in evaluation.hits][:5]
+    contradictory = _contradictory_evidence_ids(facts, invalidation_hits)
+
+    if dry_run:
+        return OpportunityBuildResult(
+            thesis_type=thesis_type, created=False, coverage=evaluation.coverage,
+            match_score=score.match_score, rule_score=score.rule_score,
+            risk_score=score.risk_score, reason="dry_run：未写库",
+            invalidated=should_invalidate,
+        )
+
+    # ---- Thesis（规格 §21：保存的是「因为 X 逻辑，所以关注 Y」）----
+    statement = strategy.build_statement(facts, evaluation)  # type: ignore[attr-defined]
+    why_now = strategy.why_now(facts)  # type: ignore[attr-defined]
+
+    thesis = session.exec(
+        select(Thesis).where(
+            Thesis.company_id == company_id, Thesis.thesis_type == ThesisType(thesis_type)
+        )
+    ).first()
+    if thesis is None:
+        thesis = Thesis(
+            company_id=company_id,
+            thesis_type=ThesisType(thesis_type),
+            statement=statement,
+            invalidating_event_types=[d.event_type for d in definition.invalidating_events],
+        )
+        session.add(thesis)
+        session.flush()
+    else:
+        thesis.statement = statement
+        thesis.is_active = not should_invalidate
+        thesis.updated_at = datetime.now(timezone.utc)
+    # INV-TT1：失效条件不得为空
+    guard.check_thesis_invalidation(
+        thesis.invalidating_event_types or [d.event_type for d in definition.invalidating_events]
+    )
+    thesis.why_now_past = why_now.get("past")
+    thesis.why_now_recent = why_now.get("recent")
+    thesis.why_now_this_week = why_now.get("this_week")
+    thesis.why_now_conclusion = why_now.get("conclusion", "")
+    thesis.supporting_evidence_ids = list(supporting)
+    thesis.contradictory_evidence_ids = list(contradictory)
+    session.add(thesis)
+    session.flush()
+    thesis_id = int(thesis.id or 0)
+
+    # ---- Opportunity ----
+    stage = strategy.catalyst_strength(facts)  # type: ignore[attr-defined]
+    risks = _risk_labels(score)
+    watch = (
+        ["该逻辑已失效，观察是否重新筹划或出现反向进展"]
+        if should_invalidate
+        else _next_watch(definition, stage.score, facts)
+    )
+
+    opportunity = session.exec(
+        select(Opportunity).where(
+            Opportunity.company_id == company_id,
+            Opportunity.profile_id == profile_id,
+            Opportunity.thesis_id == thesis_id,
+        )
+    ).first()
+
+    score_before = opportunity.rule_score if opportunity else None
+    status_before = opportunity.status if opportunity else None
+
+    if should_invalidate:
+        new_status = OpportunityStatus.INVALIDATED
+    elif open_questions:
+        new_status = OpportunityStatus.PENDING_CONFIRMATION
+    else:
+        new_status = OpportunityStatus.TRACKING
+
+    # ★ 逻辑失效时，若没有历史分数，就给出「若无失效事件本应是多少」的反事实分数 ——
+    #   规格 §22 要的是「原机会评分 94 ↓ 31」这种可对比的叙事，而不是「None → 31」
+    counterfactual: float | None = None
+    if should_invalidate and score_before is None:
+        counterfactual = compute_rule_score(
+            facts, thesis_type, ratio, evaluation=evaluation, invalidation_hits=()
+        ).rule_score
+        score_before = counterfactual
+
+    if opportunity is None:
+        opportunity = Opportunity(
+            company_id=company_id,
+            profile_id=profile_id,
+            thesis_id=thesis_id,
+            status=new_status,
+            first_discovered_at=datetime.now(timezone.utc),
+        )
+        session.add(opportunity)
+        session.flush()
+    else:
+        # 状态机约束：只有合法迁移才改状态（M7-01）
+        if status_before != new_status:
+            try:
+                guard.check_status_transition(status_before, new_status)
+            except guard.InvariantViolation:
+                new_status = OpportunityStatus(status_before)
+
+    opportunity.status = new_status
+    opportunity.match_score = score.match_score
+    opportunity.rule_score = score.rule_score
+    opportunity.risk_score = score.risk_score
+    opportunity.divergence = None
+    opportunity.summary = None            # 由 analyze 节点填充（可选阶段）
+    opportunity.why_in_radar = why_in_radar
+    opportunity.why_now = [v for v in why_now.values() if v]
+    opportunity.supporting_evidence_ids = list(supporting)
+    opportunity.contradictory_evidence_ids = list(contradictory)
+    opportunity.uncertainties = list(open_questions)
+    opportunity.risks = risks
+    opportunity.next_events_to_watch = watch
+    opportunity.last_updated_at = datetime.now(timezone.utc)
+    opportunity.score_version = score.score_version
+    session.add(opportunity)
+    session.flush()
+    opportunity_id = int(opportunity.id or 0)
+
+    # ---- 状态日志（仅在实际变化时写）----
+    if status_before != new_status:
+        session.add(OpportunityStatusLog(
+            opportunity_id=opportunity_id,
+            from_status=status_before,
+            to_status=new_status,
+            reason=(
+                "命中逻辑失效条件" if should_invalidate
+                else f"存在 {len(open_questions)} 项待确认事项" if open_questions
+                else "无待确认事项，进入跟踪"
+            ),
+            score_before=score_before,
+            score_after=score.rule_score,
+            changed_at=datetime.now(timezone.utc),
+        ))
+
+    # ---- 维度分与逐项拆解 ----
+    _persist_scores(session, opportunity_id, score)
+
+    # ---- 待确认事项（规格 §24：必须具体）----
+    _persist_open_questions(session, opportunity_id, thesis_type, facts, open_questions)
+
+    # ---- 逻辑失效提醒（规格 §22：推的是「你的逻辑变了」）----
+    # ★ 只在**状态迁移进入**失效时发一次：重复运行不该重复打扰用户
+    if should_invalidate and status_before != OpportunityStatus.INVALIDATED:
+        session.add(Alert(
+            opportunity_id=opportunity_id,
+            alert_type="thesis_invalidated",
+            title="投资逻辑发生重大变化",
+            message=(
+                f"你关注的「{definition.display_name}」逻辑出现失效事件："
+                + "；".join(h.rule_description for h in invalidation_hits[:2])
+            ),
+            suggestion="建议重新评估该机会",
+            score_before=score_before,
+            score_after=score.rule_score,
+            triggered_by_event_id=invalidation_hits[0].event_id if invalidation_hits else None,
+            # counterfactual 仅用于日志可读性；Alert 本身只存 before/after
+            created_at=datetime.now(timezone.utc),
+        ))
+
+    if commit:
+        session.commit()
+
+    return OpportunityBuildResult(
+        thesis_type=thesis_type,
+        created=True,
+        opportunity_id=opportunity_id,
+        coverage=evaluation.coverage,
+        match_score=score.match_score,
+        rule_score=score.rule_score,
+        risk_score=score.risk_score,
+        status=new_status.value,
+        reason="已生成/更新机会",
+        invalidated=should_invalidate,
+    )
+
+
+# --------------------------------------------------------------------------- #
+def _supporting_evidence_ids(
+    facts: StrategyFacts, evaluation: StrategyEvaluation
+) -> tuple[int, ...]:
+    """支撑证据 = 命中条件所引用的事件证据（去重、保序）。"""
+    seen: list[int] = []
+    for condition in evaluation.hits:
+        for evidence_id in condition.evidence_ids:
+            if evidence_id not in seen:
+                seen.append(evidence_id)
+    if seen:
+        return tuple(seen)
+    # 回退：全部事件证据（条件未绑定证据时，至少不漏掉证据链）
+    for event in facts.events:
+        for evidence_id in event.evidence_ids:
+            if evidence_id not in seen:
+                seen.append(evidence_id)
+    return tuple(seen)
+
+
+def _contradictory_evidence_ids(facts: StrategyFacts, invalidation_hits: tuple) -> tuple[int, ...]:
+    """反证 = 失效事件所绑定的证据（规则层能找到的「相反证据」）。"""
+    hit_event_ids = {h.event_id for h in invalidation_hits}
+    seen: list[int] = []
+    for event in facts.events:
+        if event.id in hit_event_ids:
+            for evidence_id in event.evidence_ids:
+                if evidence_id not in seen:
+                    seen.append(evidence_id)
+    return tuple(seen)
+
+
+def _risk_labels(score) -> list[str]:
+    """把风险拆解转成人类可读的标签（只列严重度 ≥ 中低的部分）。"""
+    severity_by_key = score.risk_severities
+    labels: list[str] = []
+    for item in score.dimension(ScoreDimension.RISK).items:
+        key = item.rule_id.removeprefix("R-GEN-RK-").lower()
+        severity = severity_by_key.get(key)
+        if severity is None or severity < RISK_LIST_THRESHOLD:
+            continue
+        labels.append(item.reason)
+    return labels
+
+
+def _next_watch(definition, current_stage_score: float, facts: StrategyFacts) -> list[str]:
+    """「下一步观察什么」= 当前催化剂阶段**之上**的阶梯 + 未回复的问询。
+
+    这样它天然对应该策略真实的推进路径，而不是一句写死的话。
+    """
+    watch = [
+        stage.stage
+        for stage in definition.catalyst_ladder
+        if stage.score > current_stage_score
+    ]
+    if facts.has_unanswered_inquiry:
+        watch.insert(0, "交易所问询回复")
+    if not watch:
+        watch = [f"是否有「{d.description}」类公告" for d in definition.invalidating_events[:2]]
+    return watch
+
+
+def _persist_scores(session: Session, opportunity_id: int, score) -> None:
+    session.exec(delete(OpportunityScore).where(
+        OpportunityScore.opportunity_id == opportunity_id
+    ))
+    session.exec(delete(ScoreItem).where(ScoreItem.opportunity_id == opportunity_id))
+    for dimension in score.dimensions:
+        session.add(OpportunityScore(
+            opportunity_id=opportunity_id,
+            dimension=dimension.dimension,
+            raw_value=dimension.raw_value,
+            weight=dimension.weight,
+            weighted_value=dimension.weighted_value,
+            source=ScoreSource.RULE,
+        ))
+    for dimension, item in score.score_items:
+        session.add(ScoreItem(
+            opportunity_id=opportunity_id,
+            source=ScoreSource.RULE,
+            dimension=dimension,
+            delta=item.delta,
+            reason=item.reason,
+            rule_id=item.rule_id,
+            evidence_ids=list(item.evidence_ids),
+        ))
+
+
+def _persist_open_questions(
+    session: Session,
+    opportunity_id: int,
+    thesis_type: str,
+    facts: StrategyFacts,
+    open_questions: tuple[str, ...],
+) -> None:
+    """写入待确认事项：未确认的标 open，已确认的带证据 ID（规格 §24 的 ✓ / ? 两侧）。"""
+    from app.strategies.restructuring import questions as restructuring_questions
+
+    session.exec(delete(OpenQuestion).where(OpenQuestion.opportunity_id == opportunity_id))
+
+    seeds = (
+        restructuring_questions.evaluate(facts)
+        if thesis_type == ThesisType.RESTRUCTURING.value
+        else ()
+    )
+    if seeds:
+        for seed in seeds:
+            session.add(OpenQuestion(
+                opportunity_id=opportunity_id,
+                question=seed.question,
+                status=seed.status,
+                confirmed_evidence_id=seed.confirmed_by_event_id,
+            ))
+        return
+
+    for question in open_questions:
+        session.add(OpenQuestion(
+            opportunity_id=opportunity_id, question=question, status="open"
+        ))
+
+
+__all__ = [
+    "MIN_COVERAGE",
+    "MIN_MATCH",
+    "OpportunityBuildResult",
+    "build_opportunities",
+]

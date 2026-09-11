@@ -110,6 +110,63 @@ class CninfoAdapter:
         return result
 
     # ------------------------------------------------------------------ #
+    def list_market_announcements(
+        self,
+        start: date,
+        end: date,
+        *,
+        page_size: int = 30,
+        max_pages: int = 20,
+    ) -> FetchResult:
+        """**全市场**按日查询公告 —— 事件优先入口（规格 §5.9 / §27）。
+
+        不传 ``stock`` 参数即返回当日全市场公告（实测 3 天窗口约 5540 条，
+        约 1850 条/天，与规格 §27 的估算一致）。
+
+        这条路不依赖 akshare（东方财富）—— 实测该源在本环境不可达，
+        而 cninfo 可用，因此候选池改为「从市场发生了什么开始」。
+        """
+        result = FetchResult()
+        for page_number in range(1, max_pages + 1):
+            payload = {
+                "pageNum": page_number,
+                "pageSize": page_size,
+                "column": "szse",
+                "tabName": "fulltext",
+                "plate": "",
+                "stock": "",
+                "searchkey": "",
+                "secid": "",
+                "category": "",
+                "trade": "",
+                "seDate": f"{start.isoformat()}~{end.isoformat()}",
+                "sortName": "",
+                "sortType": "",
+                "isHLtitle": "true",
+            }
+            try:
+                data = self._post(payload)
+            except AdapterError as exc:
+                result.add_error("cninfo_market_query", str(exc), page=page_number)
+                break
+
+            batch = data.get("announcements") or []
+            for item in batch:
+                parsed = self._to_raw(item)
+                if parsed is None:
+                    result.add_error(
+                        "cninfo_parse_item",
+                        "公告条目字段不完整（缺少 secCode / announcementId / adjunctUrl）",
+                    )
+                    continue
+                result.items.append(parsed)
+
+            if not data.get("hasMore") or not batch:
+                break
+            time.sleep(self.delay)
+        return result
+
+    # ------------------------------------------------------------------ #
     def fetch_document(self, url: str) -> bytes:
         """下载公告原文（PDF 或 HTML）。"""
         full_url = url if url.startswith("http") else f"{STATIC_BASE}{url.lstrip('/')}"
@@ -145,11 +202,12 @@ class CninfoAdapter:
             )
         return data
 
-    def _to_raw(self, item: dict, company_code: str) -> RawAnnouncement | None:
+    def _to_raw(self, item: dict, company_code: str | None = None) -> RawAnnouncement | None:
         document_id = item.get("announcementId")
         adjunct = item.get("adjunctUrl")
         title = (item.get("announcementTitle") or "").replace("<em>", "").replace("</em>", "")
-        if not document_id or not adjunct:
+        code = company_code or str(item.get("secCode") or "")
+        if not document_id or not adjunct or not code:
             return None
         timestamp = item.get("announcementTime")
         if isinstance(timestamp, (int, float)):
@@ -157,7 +215,8 @@ class CninfoAdapter:
         else:
             published = datetime.now(timezone.utc)
         return RawAnnouncement(
-            company_code=company_code,
+            company_code=code,
+            company_name=str(item.get("secName") or ""),
             document_id=str(document_id),
             title=title,
             announcement_type=item.get("announcementType"),

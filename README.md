@@ -128,7 +128,7 @@ cd frontend && npm install && npm run dev
 | 3 | 后端骨架 + 建表 + 测试 | ✅ 234 个测试通过 |
 | 4 | 前端骨架 + 5 页面 | ✅ 类型检查 + 生产构建通过 |
 | 5 | 采集脚本 + mock 数据 | ✅ 含规格 §5.6 的 10 个示例 |
-| 6 | 重组预期闭环（真实数据） | ⬜ 下一步 |
+| 6 | 重组预期闭环（真实数据） | ✅ cninfo 全市场 420 条 → 2 次 LLM 抽取全部通过 |
 
 
 ### 已验证的能力（不是「计划」，是已经跑通的）
@@ -138,7 +138,12 @@ cd frontend && npm install && npm run dev
 数据库 26 张业务表由 Alembic 管理（alembic upgrade head 成功）
 API    /api/health 返回 ok（26 张表 + 10 类策略注册表自检通过）
 前端   tsc --noEmit 与 vite build 均通过；后端未启动时自动降级为「离线演示数据」
-LLM    真实 Ollama qwen3:4b 抽取一次通过（105s/条，JSON 合规，证据片段未被改写）
+LLM    真实 Ollama qwen3:4b 抽取：合成样例 1/1 通过；真实公告 2/2 通过（60~70s/条）
+       ⇒ 80 条/日 ≈ 80~90 分钟，可夜间跑完；schema_failure_rate = 0.00
+数据   cninfo 全市场按日查询 420 条 → 关键词预筛 73 条 → PDF 解析 4 份，失败 0 份
+       ⇒ 风险 R2（cninfo 反爬 / PDF 质量）实测比预想轻得多
+Pipeline  Pipeline 端到端：420 条公告 → 事件抽取 → 证据闸门 → Thesis → 评分 → 机会卡
+       （mock 源覆盖到卡片：3 家公司 → 2 张卡 + 1 张被门槛正确拒绝）
 门控   规格 §5.6 示例 E / I 的顺序门控在**机制层**锁定（不是靠 prompt 提醒）
 ```
 

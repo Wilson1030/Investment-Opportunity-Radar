@@ -8,20 +8,36 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
+from typing import ClassVar
 
 
 @dataclass
 class FunnelCounters:
-    """六级漏斗计数（写入 ``IngestRun.funnel``）。"""
+    """六级漏斗计数（写入 ``IngestRun.funnel``）。
+
+    注意：``announcements_skipped`` 是**分支计数**（幂等跳过 / 预筛未命中），
+    不是主链的一级 —— 因此 ``drop_at()`` 只在 ``SEQUENTIAL_CHAIN`` 上比较，
+    否则会出现「skipped = 0 所以掉得最狠」这种无意义提示。
+    """
 
     candidates: int = 0                # Stage 1 候选池公司数
     announcements_fetched: int = 0      # 抓到的公告条数（候选池内）
-    announcements_skipped: int = 0      # 幂等跳过的条数
+    announcements_skipped: int = 0      # 幂等跳过 / 未过预筛的条数（分支）
     passed_prefilter: int = 0           # 通过关键词白名单，进入 LLM
     events_extracted: int = 0           # LLM 成功抽出并落库的事件数
     thesis_candidates: int = 0          # 命中至少一个策略的机会候选数
     deep_analyzed: int = 0              # 进入 LLM 深度分析的机会数
     cards: int = 0                      # 最终展示的机会卡数
+
+    #: 主链（严格递增的漏斗路径）
+    SEQUENTIAL_CHAIN: ClassVar[tuple[str, ...]] = (
+        "candidates",
+        "announcements_fetched",
+        "passed_prefilter",
+        "events_extracted",
+        "thesis_candidates",
+        "cards",
+    )
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -40,15 +56,19 @@ class FunnelCounters:
 
     def drop_at(self) -> str | None:
         """返回掉得最狠的一级 —— 直接回答「今天为什么只有 N 张卡」。"""
-        stages = self.stages
+        pairs = list(zip(self.SEQUENTIAL_CHAIN, self.SEQUENTIAL_CHAIN[1:]))
         worst: tuple[str, float] | None = None
-        for (name_a, value_a), (name_b, value_b) in zip(stages, stages[1:]):
+        for name_a, name_b in pairs:
+            value_a, value_b = getattr(self, name_a), getattr(self, name_b)
             if value_a <= 0:
                 continue
             kept = value_b / value_a
             if worst is None or kept < worst[1]:
                 worst = (f"{name_a} → {name_b}", kept)
-        return worst[0] if worst else None
+        if worst is None:
+            return None
+        # 只保留到「卡」为止的最后一次真实衰减；完全没衰减就不提示
+        return worst[0] if worst[1] < 0.98 else None
 
 
 @dataclass

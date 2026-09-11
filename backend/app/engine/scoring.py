@@ -99,6 +99,22 @@ def compute_match_score(profile_weight_ratio: float, coverage: float) -> float:
     return round(100.0 * ratio * cov, 2)
 
 
+def profile_weight_ratio(weights: dict[str, float], thesis_type: str) -> float:
+    """``w_thesis / w_max`` ∈ [0, 1]（docs/04 §4.1）。
+
+    画像里没有配置该策略 → 0（不会误报高匹配）；
+    权重可为任意正数，读取时按最大值归一化（INV-PW1：权重之和不必为 1）。
+    """
+    positive = {k: v for k, v in (weights or {}).items() if v and v > 0}
+    if not positive:
+        return 0.0
+    maximum = max(positive.values())
+    current = (weights or {}).get(thesis_type, 0.0) or 0.0
+    if maximum <= 0 or current <= 0:
+        return 0.0
+    return min(1.0, current / maximum)
+
+
 def compute_divergence(rule_score: float, semantic_score: float | None) -> float | None:
     if semantic_score is None:
         return None
@@ -145,9 +161,14 @@ def compute_rule_score(
     coverage = evaluation.coverage
     match_score = compute_match_score(profile_weight_ratio, coverage)
 
+    invalidating_ids = frozenset(
+        getattr(hit, "event_id", None) for hit in invalidation_hits
+    ) - {None}
     computations: list[DimensionComputation] = [
         rules.compute_thesis_match_dimension(thesis_type, coverage, profile_weight_ratio),
-        rules.compute_event_catalyst_dimension(facts, thesis_type, decay),
+        rules.compute_event_catalyst_dimension(
+            facts, thesis_type, decay, invalidating_event_ids=invalidating_ids
+        ),
         rules.compute_catalyst_strength_dimension(facts, thesis_type),
         rules.compute_certainty_dimension(facts),
         rules.compute_fundamentals_dimension(facts),
@@ -235,6 +256,7 @@ __all__ = [
     "compute_divergence",
     "compute_match_score",
     "compute_rule_score",
+    "profile_weight_ratio",
     "is_divergence_flagged",
     "verify_internal_consistency",
 ]

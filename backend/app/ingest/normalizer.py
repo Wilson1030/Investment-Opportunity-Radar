@@ -33,14 +33,21 @@ class UpsertOutcome:
 
 def upsert_company(
     session: Session, code: str, name: str = "", *, is_st: bool = False,
-    commit: bool = True,
+    commit: bool = True, exchange: str | None = None,
 ) -> Company:
     stock = session.exec(select(Stock).where(Stock.code == code)).first()
     if stock is not None:
         company = session.get(Company, stock.company_id)
         if company is not None:
+            changed = False
+            # 真实数据里公司名可能后到（先以代码占位）—— 补上，而不是新建一条
+            if name and (not company.name or company.name == code):
+                company.name = name
+                changed = True
             if is_st and not company.is_st:
                 company.is_st = True
+                changed = True
+            if changed:
                 company.updated_at = datetime.now(timezone.utc)
                 session.add(company)
                 if commit:
@@ -51,7 +58,7 @@ def upsert_company(
     session.add(company)
     session.flush()
     session.add(Stock(company_id=int(company.id or 0), code=code,
-                      exchange=_exchange_of(code), name=name or code))
+                      exchange=exchange or _exchange_of(code), name=name or code))
     if commit:
         session.commit()
         session.refresh(company)

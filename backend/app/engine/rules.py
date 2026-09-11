@@ -88,6 +88,9 @@ RISK_TRIGGER_PREDICATES: dict[str, RiskPredicate] = {
     "social_buzz_only": lambda f, c: f.market.social_buzz and not f.has_hard_evidence,
 }
 
+#: 失效事件在「事件催化」维度上的扣分（docs/04 §4.2 的负向项）
+EVENT_CATALYST_INVALIDATION_PENALTY = -60.0
+
 #: 风险严重度形容词分档（docs/04 §4.8）—— 仅用于展示，计算使用 0~1 连续值
 SEVERITY_BANDS: tuple[tuple[float, str], ...] = (
     (0.80, "高"),
@@ -147,15 +150,40 @@ def compute_thesis_match_dimension(
 # 事件催化（规格 §12 的「事件重要程度」）
 # --------------------------------------------------------------------------- #
 def compute_event_catalyst_dimension(
-    facts: StrategyFacts, thesis_type: str, decay: float
+    facts: StrategyFacts,
+    thesis_type: str,
+    decay: float,
+    *,
+    invalidating_event_ids: frozenset[int] = frozenset(),
 ) -> DimensionComputation:
+    """事件催化。
+
+    ★ **失效事件不得作为正向催化计分。** 一份「终止重大资产重组」的 A 类公告
+    如果照拿「存在 A 类公告直接对应核心事件类型 +40」，评分就会出现
+    「逻辑已经失效但分数几乎没掉」这种自相矛盾的结果。
+    因此：
+      1. 失效事件被排除在正向催化之外
+      2. 另设负向项 ``R-GEN-EV-INVALID`` 主动减分
+    """
     definition = get_def(thesis_type)
     support = set(definition.support_event_types)
     hits: list[RuleHit] = []
     total = 0.0
 
-    support_events = [e for e in facts.events if e.event_type in support]
+    all_support = [e for e in facts.events if e.event_type in support]
+    support_events = [e for e in all_support if e.id not in invalidating_event_ids]
+    invalidating_events = [e for e in all_support if e.id in invalidating_event_ids]
     best_level = facts.best_evidence_level
+
+    if invalidating_events:
+        total += EVENT_CATALYST_INVALIDATION_PENALTY
+        hits.append(RuleHit(
+            "R-GEN-EV-INVALID", ScoreDimension.EVENT_CATALYST,
+            EVENT_CATALYST_INVALIDATION_PENALTY,
+            "出现失效事件，且该事件不作为正向催化计分"
+            f"（{'、'.join(e.title[:24] for e in invalidating_events[:2])}）",
+            tuple(e.id for e in invalidating_events),
+        ))
 
     if any(e.evidence_level is ReliabilityLevel.A for e in support_events):
         total += 40
@@ -501,6 +529,7 @@ def compute_risk(
 
 
 __all__ = [
+    "EVENT_CATALYST_INVALIDATION_PENALTY",
     "FUNDAMENTALS_BASELINE",
     "MARKET_BASELINE",
     "OPEN_QUESTION_PENALTY",

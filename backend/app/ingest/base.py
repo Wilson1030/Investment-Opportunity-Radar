@@ -30,7 +30,11 @@ class AdapterSchemaError(AdapterError):
 
 @dataclass(frozen=True)
 class RawAnnouncement:
-    """公告列表项（未解析全文）。"""
+    """公告列表项（未解析全文）。
+
+    ``company_name`` 与 ``source`` 带默认值，必须放在必填字段之后 —— 否则
+    dataclass 会因「非默认参数跟在默认参数后」报错。
+    """
 
     company_code: str
     document_id: str
@@ -39,6 +43,7 @@ class RawAnnouncement:
     publication_time: datetime
     url: str
     source: str = "cninfo"
+    company_name: str = ""
 
 
 @dataclass

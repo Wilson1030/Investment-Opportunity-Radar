@@ -1,0 +1,749 @@
+"""Pipeline 编排：`python -m app.ingest` 的实现。
+
+    Stage 1  候选池          scope 过滤 → 约 300 只（D11）
+    Stage 2  公告采集+解析    cninfo 列表 → 全文 → 段落切分（D10）
+    Stage 3  事件抽取        规则预筛 → LLM 抽取 → **证据闸门** → Event + Evidence
+    Stage 4  机会组装        策略命中 → Thesis → 评分 → Opportunity + 待确认 + 状态
+    Stage 5  dry-run 判定     事实写库、判断不写库，并把报告 dump 到 data/cache/dry_run/
+
+**dry-run 语义（修订版）**
+
+    ✅ 写：IngestRun（带 dry_run=True）→ 保证 dry-run 期间也能看到漏斗与质量指标
+    ✅ 写：Company / Stock / Announcement / Paragraph
+           —— 它们是**事实**，幂等且无害
+    ❌ 不写：Event / Evidence / Thesis / Opportunity / Score / OpenQuestion / Alert
+           —— 它们是**判断**，未经校准不应进入系统
+
+区分点是「**事实 vs 判断**」，而不是「是否写库」：否则 LLM 抽取阶段没有输入，
+dry-run 反而看不到 AI 链路的质量（这正是风险 R3 最需要数据的地方）。
+
+两个数据源::
+
+    --source mock    确定性离线（规则合成抽取结果）→ 用于回归整条链路
+    --source cninfo  真实公告 + 真实 LLM（默认）
+
+产出必须回答的三个问题（docs/03 §8）：
+    1. 为什么今天只有 N 张卡？   → funnel.drop_at()
+    2. 数据质量如何？             → quality.parse_failure_rate
+    3. 本机 4B 模型能否胜任？     → quality.llm_schema_failure_rate
+"""
+
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass, field
+from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
+
+from sqlmodel import Session, select
+
+from app.ai.cache import SqlNodeCache
+from app.ai.nodes import EXTRACT_EVENT
+from app.ai.provider import LlmError, build_provider
+from app.ai.runner import NodeRunner
+from app.ai.schemas import (
+    AnnouncementInput,
+    CompanyInput,
+    ExtractEventInput,
+    ParagraphInput,
+)
+from app.config import settings
+from app.db import engine, init_db
+from app.engine import classifier, funnel
+from app.engine import scope as scope_engine
+from app.ingest import parcel
+from app.ingest.base import AdapterError, RawAnnouncement
+from app.ingest.cninfo import CninfoAdapter
+from app.ingest.normalizer import upsert_announcement, upsert_company
+from app.models.audit import IngestRun
+from app.models.events import Event
+from app.models.knowledge import Announcement, Company, Paragraph, Stock
+from app.pipeline import event_writer, mock_source, opportunity_builder, profile_seed
+from app.pipeline.opportunity_builder import OpportunityBuildResult, build_opportunities
+
+SOURCE_MOCK = "mock"
+SOURCE_CNINFO = "cninfo"
+
+#: 候选池构建方式
+#:   market  = 事件优先：全市场按日查询 → 关键词预筛（只用 cninfo，**默认**）
+#:   company = 公司优先：先取 ST 名单再逐家查（需要 akshare；实测本环境不可达）
+POOL_MARKET = "market"
+POOL_COMPANY = "company"
+
+
+@dataclass
+class PipelineOptions:
+    stage: str = "full"                     # full | incremental | rescore
+    dry_run: bool = True
+    limit: int | None = None
+    scope: str = settings.ingest_scope
+    source: str = SOURCE_MOCK
+    #: 是否调用 LLM 做事件抽取（mock 源忽略此项，使用规则合成）
+    with_llm: bool = True
+    #: 仅为前 N 条公告调用 LLM（本地 4B 慢，先用小样本验证）
+    llm_limit: int | None = 3
+    #: 候选池构建方式（见 POOL_MARKET / POOL_COMPANY）
+    pool: str = POOL_MARKET
+    #: 全市场查询最多翻多少页（每页 30 条）
+    market_pages: int = 20
+    #: 单条公告送入 LLM 的最大字符数（None = 用 settings 默认值）
+    max_input_chars: int | None = None
+    lookback_days: int | None = None
+    profile_template: str | None = profile_seed.DEFAULT_TEMPLATE
+
+
+@dataclass
+class PipelineOutcome:
+    report: funnel.PipelineReport
+    opportunities: list[OpportunityBuildResult] = field(default_factory=list)
+    extract_stats: dict = field(default_factory=dict)
+    company_ids: list[int] = field(default_factory=list)
+    #: 逐条抽取结果（dry-run 的核心可读产出：让人核对 AI 判断的质量）
+    extractions: list[dict] = field(default_factory=list)
+
+    def to_dict(self) -> dict:
+        payload = self.report.to_dict()
+        payload["opportunities"] = [
+            {
+                "thesis_type": r.thesis_type,
+                "created": r.created,
+                "opportunity_id": r.opportunity_id,
+                "coverage": round(r.coverage, 4),
+                "match_score": r.match_score,
+                "rule_score": None if r.rule_score is None else round(r.rule_score, 4),
+                "risk_score": r.risk_score,
+                "status": r.status,
+                "invalidated": r.invalidated,
+                "reason": r.reason,
+            }
+            for r in self.opportunities
+        ]
+        payload["llm"] = self.extract_stats
+        payload["companies"] = len(self.company_ids)
+        payload["extractions"] = self.extractions
+        return payload
+
+
+def _dry_run_dir() -> Path:
+    path = settings.cache_dir / "dry_run" / date.today().isoformat()
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+# --------------------------------------------------------------------------- #
+def effective_dry_run(options: PipelineOptions) -> bool:
+    """mock 源是**本地夹具**：它必须真实写库，否则无法验证「DB → 机会卡」这一段。
+
+    真实数据源的 dry-run 语义见 :func:`run_pipeline` 的文档字符串。
+    """
+    if options.source == SOURCE_MOCK:
+        return False
+    return options.dry_run
+
+
+def run_pipeline(options: PipelineOptions | None = None) -> PipelineOutcome:
+    options = options or PipelineOptions()
+    options.lookback_days = options.lookback_days or settings.ingest_lookback_days
+    if options.max_input_chars:
+        settings.llm_max_input_chars = options.max_input_chars
+    write = not effective_dry_run(options)
+    if options.source == SOURCE_MOCK and options.dry_run:
+        print(
+            "[mock] 注意：mock 源会真实写库（它是本地夹具，用于验证 DB → 机会卡 的全链路）。\n"
+            "       如需回到干净状态：删除 backend/data/radar.db 后重新运行。"
+        )
+    options.dry_run = not write
+
+    settings.ensure_dirs()
+    init_db()
+
+    report = funnel.PipelineReport(
+        scope=options.scope, dry_run=options.dry_run, stage_name=options.stage
+    )
+    started = datetime.now(timezone.utc)
+    outcome = PipelineOutcome(report=report)
+
+    with Session(engine) as session:
+        run = _start_run(session, options, report)
+
+        profile = profile_seed.get_or_create_default_profile(session, options.profile_template)
+        weights = profile_seed.profile_weights(session, int(profile.id or 0))
+        report.quality.field_missing_rate = 0.0
+        del weights  # 权重在 build_opportunities 内按 profile_id 重新读取
+
+        if options.source == SOURCE_MOCK:
+            created = mock_source.seed(session, commit=True)
+            print(f"[mock] 造数完成：{created}")
+            company_ids = [
+                int(c.id or 0) for c in session.exec(select(Company)).all()
+            ]
+            report.funnel.record("candidates", len(company_ids))
+            announcements = mock_source.pending_announcements(session)
+            report.funnel.record("announcements_fetched", len(announcements))
+            report.funnel.record("passed_prefilter", len(announcements))
+        else:
+            company_ids, announcements = _collect_cninfo(session, options, report)
+
+        outcome.company_ids = company_ids
+
+        # ---------- Stage 3：事件抽取 ----------
+        _extract_events(session, options, report, outcome, announcements)
+
+        # ---------- Stage 4：机会组装 ----------
+        _build_opportunities(session, options, report, outcome, company_ids, profile.id)
+
+        # ---------- 收尾 ----------
+        report.total_ms = int((datetime.now(timezone.utc) - started).total_seconds() * 1000)
+        _finish_run(session, run, options, report)
+
+    if options.dry_run:
+        target = _dry_run_dir() / f"pipeline_{options.source}_{options.stage}.json"
+        target.write_text(
+            json.dumps(outcome.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        print(f"\n[dry-run] 报告已写入 {target}（业务表未被修改）")
+
+    return outcome
+
+
+# --------------------------------------------------------------------------- #
+def _start_run(session: Session, options: PipelineOptions, report: funnel.PipelineReport) -> IngestRun | None:
+    """观测记录在 dry-run 下**也要写** —— 否则 dry-run 期间看不到漏斗与质量指标。"""
+    run = IngestRun(
+        adapter=options.source,
+        scope=options.scope,
+        dry_run=options.dry_run,
+        stage=options.stage,
+        started_at=datetime.now(timezone.utc),
+    )
+    session.add(run)
+    session.commit()
+    session.refresh(run)
+    report.run_id = int(run.id or 0)
+    return run
+
+
+def _finish_run(
+    session: Session,
+    run: IngestRun | None,
+    options: PipelineOptions,
+    report: funnel.PipelineReport,
+) -> None:
+    if run is None:  # pragma: no cover - 防御
+        return
+    run.finished_at = datetime.now(timezone.utc)
+    run.items_found = report.funnel.announcements_fetched
+    run.items_new = report.funnel.events_extracted
+    run.items_skipped = report.funnel.announcements_skipped
+    run.items_failed = len([e for e in report.errors if e.get("stage") != "info"])
+    run.funnel = report.funnel.to_dict()
+    run.quality = report.quality.to_dict()
+    run.errors = report.errors
+    run.error_summary = "; ".join(e.get("error", "") for e in report.errors[:3]) or None
+    session.add(run)
+    session.commit()
+
+
+# --------------------------------------------------------------------------- #
+# Stage 1 + 2：候选池与采集
+# --------------------------------------------------------------------------- #
+def _collect_cninfo(
+    session: Session, options: PipelineOptions, report: funnel.PipelineReport
+) -> tuple[list[int], list[Announcement]]:
+    """真实采集。
+
+    ``pool=market``（默认）走**事件优先**：全市场按日查询 → 关键词预筛 → 只解析命中项。
+    这条路只需要 cninfo，不需要 akshare。
+    """
+    adapter = CninfoAdapter()
+    end = date.today()
+    start = end - timedelta(days=options.lookback_days or 90)
+
+    if options.pool == POOL_MARKET:
+        return _collect_market_first(session, options, report, adapter, start, end)
+
+    candidates = _candidate_pairs(session, options, report)
+    if options.limit:
+        candidates = candidates[: options.limit]
+    report.funnel.record("candidates", len(candidates))
+
+    parse_attempts = 0
+    parse_failures = 0
+
+    for company_id, code in candidates:
+        try:
+            fetched = adapter.list_announcements(code, start, end, max_pages=1)
+        except AdapterError as exc:
+            report.add_error("cninfo_query", str(exc), code=code)
+            continue
+
+        for error in fetched.errors:
+            report.add_error(error.get("stage", "cninfo"), error.get("error", ""), code=code)
+
+        for raw in fetched.items:
+            report.funnel.increment("announcements_fetched")
+            if not classifier.passes_prefilter(raw.title, raw.announcement_type):
+                report.funnel.increment("announcements_skipped")
+                continue
+            report.funnel.increment("passed_prefilter")
+
+            parsed = None
+            if settings.store_announcement_fulltext:
+                parse_attempts += 1
+                parsed = _parse_remote(adapter, raw, report)
+                if parsed is None or parsed.parse_status != "ok":
+                    parse_failures += 1
+
+            outcome = upsert_announcement(
+                session, company_id, raw, parsed,
+                ingest_run_id=report.run_id, dry_run=False,   # 原始数据是事实，幂等且无害
+            )
+            if outcome.skipped_reason and "幂等" in outcome.skipped_reason:
+                report.funnel.increment("announcements_skipped")
+
+    report.quality.parse_failure_rate = parse_failures / parse_attempts if parse_attempts else 0.0
+    if parse_attempts:
+        report.quality.needs_ocr = parse_failures
+
+    announcements = _pending_announcements(session)
+    return [cid for cid, _ in candidates], announcements
+
+
+
+def _collect_market_first(
+    session: Session,
+    options: PipelineOptions,
+    report: funnel.PipelineReport,
+    adapter: CninfoAdapter,
+    start: date,
+    end: date,
+) -> tuple[list[int], list[Announcement]]:
+    """Stage 0 + 1 + 2：全市场公告 → 关键词预筛 → 候选公司。
+
+    漏斗：全市场数千条/3 天 → 命中白名单的少数条 → 去重后的候选公司。
+    """
+    fetched = adapter.list_market_announcements(
+        start, end, page_size=30, max_pages=options.market_pages
+    )
+    for error in fetched.errors:
+        report.add_error(error.get("stage", "cninfo"), error.get("error", ""))
+
+    report.funnel.record("announcements_fetched", len(fetched.items))
+    print(
+        f"[cninfo] 全市场扫描 {start} ~ {end}：{len(fetched.items)} 条公告"
+        f"（{options.market_pages} 页 × 30；查询错误 {len(fetched.errors)} 条）"
+    )
+
+    matched: list[RawAnnouncement] = []
+    for raw in fetched.items:
+        if not classifier.passes_prefilter(raw.title, raw.announcement_type):
+            report.funnel.increment("announcements_skipped")
+            continue
+        matched.append(raw)
+    report.funnel.record("passed_prefilter", len(matched))
+
+    distribution: dict[str, int] = {}
+    for raw in matched:
+        event_type = classifier.classify_announcement(raw.title, raw.announcement_type)
+        key = event_type.value if event_type else "?"
+        distribution[key] = distribution.get(key, 0) + 1
+    print(f"[cninfo] 通过关键词预筛：{len(matched)} 条 → 事件类型分布 {distribution}")
+
+    if options.limit:
+        matched = matched[: options.limit]
+
+    parse_attempts = 0
+    parse_failures = 0
+    company_ids: list[int] = []
+
+    for raw in matched:
+        company = upsert_company(session, raw.company_code, raw.company_name, commit=False)
+        company_id = int(company.id or 0)
+        if company_id not in company_ids:
+            company_ids.append(company_id)
+
+        parsed = None
+        if settings.store_announcement_fulltext:
+            parse_attempts += 1
+            parsed = _parse_remote(adapter, raw, report)
+            if parsed is None or parsed.parse_status != "ok":
+                parse_failures += 1
+
+        upsert_announcement(
+            session, company_id, raw, parsed,
+            ingest_run_id=report.run_id, dry_run=False,   # 原始数据是事实，幂等且无害
+            commit=False,
+        )
+
+    session.commit()
+
+    report.funnel.record("candidates", len(company_ids))
+    report.quality.parse_failure_rate = (
+        parse_failures / parse_attempts if parse_attempts else 0.0
+    )
+    report.quality.needs_ocr = parse_failures
+    print(
+        f"[cninfo] 候选公司 {len(company_ids)} 家 | 全文解析 {parse_attempts} 条，"
+        f"失败/需 OCR {parse_failures} 条（失败率 {report.quality.parse_failure_rate:.2f}）"
+    )
+
+    return company_ids, _pending_announcements(session)
+
+
+def _candidate_pairs(
+    session: Session, options: PipelineOptions, report: funnel.PipelineReport
+) -> list[tuple[int, str]]:
+    """候选池：优先用库里的，库为空时用 akshare 的 ST 名单冷启动。"""
+    result = scope_engine.select_candidates(
+        session,
+        scope_engine.ScopeConfig(
+            scope=options.scope, lookback_days=options.lookback_days or 90
+        ),
+    )
+    pairs: list[tuple[int, str]] = []
+    for company_id in result.company_ids:
+        stock = session.exec(select(Stock).where(Stock.company_id == company_id)).first()
+        if stock is not None:
+            pairs.append((company_id, stock.code))
+    if pairs:
+        return pairs
+
+    try:
+        from app.ingest.akshare_source import AkshareSource
+
+        codes = AkshareSource().st_company_codes()
+    except (AdapterError, ImportError, Exception) as exc:  # noqa: BLE001
+        report.add_error(
+            "candidate_pool",
+            f"无法获取 ST 名单（{type(exc).__name__}: {exc}）；候选池为空",
+        )
+        return []
+
+    from app.ingest.normalizer import upsert_company
+
+    for code in codes:
+        company = upsert_company(session, code, is_st=True, commit=False)
+        pairs.append((int(company.id or 0), code))
+    session.commit()
+    return pairs
+
+
+def _parse_remote(adapter: CninfoAdapter, raw: RawAnnouncement, report: funnel.PipelineReport):
+    try:
+        content = adapter.fetch_document(raw.url)
+    except AdapterError as exc:
+        report.add_error("download", str(exc), document_id=raw.document_id)
+        return None
+
+    if content[:4] == b"%PDF":
+        tmp = settings.raw_dir / f"{raw.document_id}.pdf"
+        tmp.parent.mkdir(parents=True, exist_ok=True)
+        tmp.write_bytes(content)
+        return parcel.parse_pdf(tmp)
+    if raw.url.lower().endswith((".html", ".htm")):
+        return parcel.parse_html(content.decode("utf-8", errors="ignore"))
+
+    report.add_error("parse_format", f"未知文档格式：{raw.url}", document_id=raw.document_id)
+    return None
+
+
+# --------------------------------------------------------------------------- #
+# Stage 3：事件抽取（含证据闸门）
+# --------------------------------------------------------------------------- #
+def _pending_announcements(session: Session) -> list[Announcement]:
+    rows = session.exec(
+        select(Announcement).where(Announcement.event_type.is_not(None))  # type: ignore[union-attr]
+    ).all()
+    pending: list[Announcement] = []
+    for row in rows:
+        exists = session.exec(
+            select(Event).where(
+                Event.company_id == row.company_id, Event.source_url == row.source_url
+            )
+        ).first()
+        if exists is None:
+            pending.append(row)
+    return pending
+
+
+def _extract_events(
+    session: Session,
+    options: PipelineOptions,
+    report: funnel.PipelineReport,
+    outcome: PipelineOutcome,
+    announcements: list[Announcement],
+) -> None:
+    runner: NodeRunner | None = None
+    if options.source != SOURCE_MOCK and options.with_llm:
+        provider_name, model, base_url, api_key = settings.llm_for("extract")
+        provider = build_provider(provider_name, base_url, api_key)
+        runner = NodeRunner(
+            provider=provider,
+            cache=SqlNodeCache(session) if not options.dry_run else _NoCache(),
+            model=model,
+            max_attempts=settings.llm_max_attempts,
+            timeout_seconds=settings.llm_timeout_seconds,
+        )
+        print(f"[llm] 抽取层 {provider_name}/{model} @ {base_url}")
+
+    llm_used = 0
+    for announcement in announcements:
+        if options.source != SOURCE_MOCK and llm_used >= (options.llm_limit or 10**9):
+            report.add_error(
+                "info",
+                f"已达 --llm-limit {options.llm_limit}，剩余公告本轮不再调用 LLM",
+            )
+            break
+
+        paragraphs = mock_source.paragraph_objects(session, int(announcement.id or 0))
+        if not paragraphs:
+            report.add_error(
+                "extract_skip", "公告无可用于定位证据的段落（解析失败或扫描件）",
+                document_id=announcement.document_id,
+            )
+            continue
+
+        try:
+            extraction = _extract_one(session, announcement, paragraphs, options, runner)
+        except (LlmError, ValueError) as exc:
+            report.add_error("extract_failed", str(exc), document_id=announcement.document_id)
+            continue
+
+        if options.source != SOURCE_MOCK:
+            llm_used += 1
+
+        if extraction is None:
+            report.add_error(
+                "extract_failed", "抽取未通过 Schema 校验（已重试）",
+                document_id=announcement.document_id,
+            )
+            continue
+
+        result = event_writer.persist_extraction(
+            session, int(announcement.company_id), announcement, extraction,
+            dry_run=options.dry_run,     # ★ 判断类数据：dry-run 不写
+        )
+        if result.gate_passed:
+            # ★ 统计「通过证据闸门」而不是「落库成功」：dry-run 下判断类数据不落库，
+            #   但抽取质量恰恰是 dry-run 最需要被看见的东西
+            report.funnel.increment("events_extracted")
+
+        outcome.extractions.append({
+            "document_id": announcement.document_id,
+            "announcement_title": announcement.title[:60],
+            "event_type": result.event_type,
+            "title": result.title[:60],
+            "gate_passed": result.gate_passed,
+            "accepted_slices": result.accepted_slices,
+            "rejected": [{"at": at, "reason": reason} for at, reason in result.rejected_slices],
+            "event_time_source": result.event_time_source,
+            "persisted": result.created,
+            "skipped_reason": result.skipped_reason,
+        })
+
+        if result.skipped_reason and "证据全部被拒" in result.skipped_reason:
+            report.add_error(
+                "evidence_gate", result.skipped_reason,
+                document_id=announcement.document_id,
+                reasons=result.rejection_reasons,
+            )
+        report.quality.evidence_rejected += len(result.rejected_slices)
+        for reason, _ in result.rejected_slices:
+            key = reason.split("：", 1)[0] if "：" in reason else reason
+            report.quality.evidence_rejected_reasons[key] = (
+                report.quality.evidence_rejected_reasons.get(key, 0) + 1
+            )
+
+    if runner is not None:
+        outcome.extract_stats = runner.stats
+        report.quality.llm_schema_failure_rate = runner.stats["schema_failure_rate"]
+        report.quality.llm_cached_rate = runner.stats["cached_rate"]
+        report.llm_ms = sum(r.latency_ms or 0 for r in runner.log)
+
+
+def _truncate_paragraphs(announcement, paragraphs, max_chars: int, max_paragraphs: int):
+    """按「与公告类型相关的关键词」挑段落，而不是盲目截前 N 字。
+
+    真实公告（半年报 / 年报）可达数万字，但真正支撑事件判断的内容集中在
+    「交易概述 / 控股股东 / 风险提示」等小节；会计附注对事件抽取没有帮助，
+    却占了绝大部分长度。所以：
+      1. 先按关键词命中数排序取前 ``max_paragraphs`` 条
+      2. 再按原顺序（page, para_index）恢复顺序 —— 保持叙事连贯
+      3. 受 ``max_chars`` 字符预算约束
+    """
+    event_type = classifier.classify_announcement(announcement.title)
+    keywords = _EVIDENCE_HINTS.get(event_type, ()) if event_type else ()
+    keywords = keywords + ("交易", "标的", "控股股东", "实际控制人", "问询", "风险提示",
+                           "终止", "失败", "重组", "收购", "增持", "回购")
+
+    scored = []
+    for index, paragraph in enumerate(paragraphs):
+        hits = sum(1 for kw in keywords if kw in paragraph.text)
+        scored.append((hits, index, paragraph))
+    scored.sort(key=lambda row: (-row[0], row[1]))
+
+    picked_indexes: list[int] = []
+    budget = max_chars
+    for hits, index, paragraph in scored:
+        if len(picked_indexes) >= max_paragraphs or budget <= 0:
+            break
+        if hits == 0 and picked_indexes:
+            break                     # 关键词已经用完，不再补无关段落
+        picked_indexes.append(index)
+        budget -= len(paragraph.text)
+
+    if not picked_indexes:            # 全部无关键词 → 退化为取最长的几条
+        picked_indexes = [row[1] for row in
+                          sorted(scored, key=lambda r: -len(r[2].text))[:max_paragraphs]]
+
+    picked_indexes.sort()             # 恢复原文顺序
+    return [paragraphs[i] for i in picked_indexes]
+
+
+#: 与事件类型相关的证据关键词（截断时用于挑段落）—— 与 mock 合成器共用一份
+from app.pipeline.mock_source import _EVIDENCE_KEYWORDS as _EVIDENCE_HINTS  # noqa: E402
+
+
+def _extract_one(session, announcement, paragraphs, options, runner):
+    if options.source == SOURCE_MOCK:
+        return mock_source.synthesize_extraction(announcement, paragraphs)
+
+    original_count = len(paragraphs)
+    paragraphs = _truncate_paragraphs(
+        announcement,
+        paragraphs,
+        settings.llm_max_input_chars,
+        settings.llm_max_paragraphs,
+    )
+    if len(paragraphs) < original_count:
+        print(
+            f"[llm] 截断：{announcement.title[:26]}… "
+            f"{original_count} 段 → {len(paragraphs)} 段"
+            f"（预算 {settings.llm_max_input_chars} 字符）"
+        )
+
+    company = session.get(Company, int(announcement.company_id))
+    stock = session.exec(
+        select(Stock).where(Stock.company_id == announcement.company_id)
+    ).first()
+    payload = ExtractEventInput(
+        company=CompanyInput(
+            name=company.name if company else "",
+            code=stock.code if stock else "",
+            is_st=bool(company.is_st) if company else False,
+            industry=company.industry if company else None,
+        ),
+        announcement=AnnouncementInput(
+            document_id=announcement.document_id,
+            title=announcement.title,
+            announcement_type=announcement.announcement_type,
+            publication_time=announcement.publication_time,
+        ),
+        paragraphs=[
+            ParagraphInput(page=int(p.page), para_index=int(p.para_index), text=p.text)
+            for p in paragraphs
+        ],
+    )
+    result = runner.run(EXTRACT_EVENT, payload)  # type: ignore[union-attr]
+    if not result.ok:
+        return None
+    return result.output
+
+
+class _NoCache:
+    """dry-run 时不写缓存（避免用 dry-run 结果污染正式缓存）。"""
+
+    def get(self, *args, **kwargs):  # noqa: D102
+        return None
+
+    def put(self, **kwargs):  # noqa: D102
+        return None
+
+
+# --------------------------------------------------------------------------- #
+# Stage 4：机会组装
+# --------------------------------------------------------------------------- #
+def _build_opportunities(
+    session: Session,
+    options: PipelineOptions,
+    report: funnel.PipelineReport,
+    outcome: PipelineOutcome,
+    company_ids: list[int],
+    profile_id: int | None,
+) -> None:
+    if profile_id is None:
+        return
+    weights = profile_seed.profile_weights(session, profile_id)
+
+    for company_id in company_ids:
+        if not session.exec(
+            select(Event.id).where(Event.company_id == company_id).limit(1)
+        ).first():
+            continue
+
+        results = build_opportunities(
+            session, company_id, profile_id, weights,
+            dry_run=options.dry_run, commit=not options.dry_run,
+        )
+        for result in results:
+            if result.created or result.coverage >= opportunity_builder.MIN_COVERAGE:
+                report.funnel.increment("thesis_candidates")
+            if result.created:
+                report.funnel.increment("cards")
+        outcome.opportunities.extend(results)
+
+
+# --------------------------------------------------------------------------- #
+# CLI
+# --------------------------------------------------------------------------- #
+STAGE_CHOICES = ("full", "incremental", "rescore")
+
+
+def main(argv: list[str] | None = None) -> int:
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        prog="python -m app.pipeline.runner",
+        description="Investment Opportunity Radar · Pipeline（采集 → 事件 → 机会）",
+    )
+    parser.add_argument("--stage", choices=STAGE_CHOICES, default="incremental")
+    parser.add_argument("--source", choices=[SOURCE_MOCK, SOURCE_CNINFO], default=SOURCE_MOCK,
+                        help="mock = 确定性离线（不联网不调 LLM）；cninfo = 真实公告 + 真实 LLM")
+    parser.add_argument("--scope", default=settings.ingest_scope,
+                        choices=["st_and_risk_warning", "all_a_shares"])
+    parser.add_argument("--live", action="store_true",
+                        help="关闭 dry-run，真实写库（需先通过 dry-run 预热，docs/07 §6）")
+    parser.add_argument("--limit", type=int, default=None, help="候选公司上限")
+    parser.add_argument("--llm-limit", type=int, default=3, help="本轮最多对几条公告调用 LLM")
+    parser.add_argument("--lookback-days", type=int, default=None)
+    parser.add_argument("--pool", choices=[POOL_MARKET, POOL_COMPANY], default=POOL_MARKET,
+                        help="market = event-first via cninfo only (default); "
+                             "company = ST list via akshare")
+    parser.add_argument("--market-pages", type=int, default=20,
+                        help="market-wide query pages (30 announcements each)")
+    parser.add_argument("--max-chars", type=int, default=None,
+                        help="max characters per announcement sent to the LLM")
+    parser.add_argument("--no-llm", action="store_true", help="只采集不抽取（调试用）")
+    args = parser.parse_args(argv)
+
+    outcome = run_pipeline(PipelineOptions(
+        stage=args.stage,
+        dry_run=not args.live,
+        limit=args.limit,
+        scope=args.scope,
+        source=args.source,
+        with_llm=not args.no_llm,
+        llm_limit=args.llm_limit,
+        lookback_days=args.lookback_days,
+        pool=args.pool,
+        market_pages=args.market_pages,
+        max_input_chars=args.max_chars,
+    ))
+
+    payload = outcome.to_dict()
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+if __name__ == "__main__":  # pragma: no cover
+    raise SystemExit(main())

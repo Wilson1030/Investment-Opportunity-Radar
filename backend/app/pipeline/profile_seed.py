@@ -1,21 +1,27 @@
-"""API 依赖与基础查询辅助。"""
+"""默认画像的创建与模板套用（MVP 单用户，D02）。
+
+放在 pipeline 层而不是 API 层：pipeline 需要画像权重来算匹配度，
+而 API 只是它的一个调用方 —— 依赖方向应该是 ``api → pipeline → engine``。
+:mod:`app.api.deps` 对本模块做转发，避免两份实现漂移。
+"""
 
 from __future__ import annotations
 
-from collections.abc import Iterator
-
 from sqlmodel import Session, select
 
-from app.db import get_session  # noqa: F401 - 供路由直接复用
-from app.models.knowledge import Company, Stock
 from app.models.profile import InvestmentProfile, Investor, ProfileThesisWeight
+from app.models.enums import ThesisType
 from app.strategies import STRATEGY_TEMPLATES
 
-#: MVP 单用户（D02：本地单用户，表结构预留 user_id 但不做鉴权）
+#: MVP 固定单用户
 DEFAULT_HANDLE = "owner"
+#: 默认套用「重组猎手」模板 —— 与第一个实现的策略一致（D13）
+DEFAULT_TEMPLATE = "重组猎手"
 
 
-def get_or_create_default_profile(session: Session) -> InvestmentProfile:
+def get_or_create_default_profile(
+    session: Session, template: str | None = DEFAULT_TEMPLATE
+) -> InvestmentProfile:
     investor = session.exec(select(Investor).where(Investor.handle == DEFAULT_HANDLE)).first()
     if investor is None:
         investor = Investor(handle=DEFAULT_HANDLE, display_name="Owner")
@@ -31,8 +37,8 @@ def get_or_create_default_profile(session: Session) -> InvestmentProfile:
         session.add(profile)
         session.commit()
         session.refresh(profile)
-        # 首次创建时套用「重组猎手」模板（与第一个实现的策略一致，D13）
-        apply_template(session, profile, "重组猎手")
+        if template:
+            apply_template(session, profile, template)
     return profile
 
 
@@ -68,30 +74,19 @@ def profile_weights(session: Session, profile_id: int) -> dict[str, float]:
     return {str(row.thesis_type): float(row.weight) for row in rows}
 
 
-def weight_ratio(weights: dict[str, float], thesis_type: str) -> float:
-    """``w_thesis / w_max`` —— 委托给 engine.scoring，避免两份实现漂移。"""
-    from app.engine.scoring import profile_weight_ratio
-
-    return profile_weight_ratio(weights, thesis_type)
-
-
-def company_index(session: Session, company_ids: list[int]) -> tuple[dict, dict]:
-    if not company_ids:
-        return {}, {}
-    companies = session.exec(select(Company).where(Company.id.in_(company_ids))).all()  # type: ignore[attr-defined]
-    stocks = session.exec(select(Stock).where(Stock.company_id.in_(company_ids))).all()  # type: ignore[attr-defined]
-    return (
-        {int(c.id or 0): c for c in companies},
-        {int(s.company_id): s for s in stocks},
-    )
+def lock_weight(session: Session, profile: InvestmentProfile, thesis_type: ThesisType) -> None:
+    locked = set(profile.locked_weights)
+    locked.add(thesis_type)
+    profile.locked_weights = sorted(locked, key=lambda t: t.value)
+    session.add(profile)
+    session.commit()
 
 
 __all__ = [
     "DEFAULT_HANDLE",
+    "DEFAULT_TEMPLATE",
     "apply_template",
-    "company_index",
     "get_or_create_default_profile",
-    "get_session",
+    "lock_weight",
     "profile_weights",
-    "weight_ratio",
 ]

@@ -74,6 +74,10 @@ class Settings(BaseSettings):
 
     # ---------- LLM 调用参数 ----------
     llm_timeout_seconds: float = 300.0
+    #: 单条公告送入 LLM 的最大字符数（真实公告可达数万字，必须截断）
+    llm_max_input_chars: int = 6000
+    #: 截断时优先保留多少条「关键词命中」的段落
+    llm_max_paragraphs: int = 14
     llm_max_attempts: int = 3
     llm_temperature: float = 0.0
 

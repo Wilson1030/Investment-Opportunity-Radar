@@ -179,7 +179,7 @@ def opportunity_card(
         "divergence_flagged": bool(
             opportunity.divergence is not None and opportunity.divergence > 20
         ),
-        "why_in_radar": opportunity.why_now,
+        "why_in_radar": opportunity.why_in_radar or opportunity.why_now,
         "summary": opportunity.summary,
         "latest_events": [event_brief(e) for e in (events or [])][:5],
         "ai_judgement": opportunity.summary,

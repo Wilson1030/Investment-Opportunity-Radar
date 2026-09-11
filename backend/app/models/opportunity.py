@@ -48,6 +48,9 @@ class Opportunity(SQLModel, table=True):
 
     # ---------- 叙事字段（规格 §25）----------
     summary: str | None = None
+    #: ★ 规格 §17「为什么进入你的关注池」= 命中的核心条件（有证据支撑的事实），
+    #: 与 why_now（过去/最近/本周/因此 的叙事结构）是**两件事**
+    why_in_radar: list[str] = Field(default_factory=list, sa_column=Column(JSON))
     why_now: list[str] = Field(default_factory=list, sa_column=Column(JSON))
     supporting_evidence_ids: list[int] = Field(default_factory=list, sa_column=Column(JSON))
     contradictory_evidence_ids: list[int] = Field(default_factory=list, sa_column=Column(JSON))

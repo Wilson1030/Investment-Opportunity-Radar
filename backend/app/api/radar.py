@@ -45,6 +45,17 @@ def radar(session: Session = Depends(get_session)) -> dict:
     ).all():
         counts[str(status)] = int(count)
 
+    # 「今日新增」= 今天首次发现的机会数（不是 status=discovered 的计数）
+    day_start = datetime.combine(date.today(), datetime.min.time(), tzinfo=timezone.utc)
+    today_new = int(
+        session.exec(
+            select(func.count())
+            .select_from(Opportunity)
+            .where(Opportunity.profile_id == profile.id)
+            .where(Opportunity.first_discovered_at >= day_start)
+        ).one()
+    )
+
     # 今日机会卡（按规则分降序）
     cards = _cards(session, profile.id, limit=DEFAULT_CARD_LIMIT)
 
@@ -83,7 +94,7 @@ def radar(session: Session = Depends(get_session)) -> dict:
             "is_trading_day": calendar.is_trading_day(date.today()),
             "calendar_degraded": calendar.degraded,
             "calendar_warning": calendar.warning,
-            "new_count": counts.get(OpportunityStatus.DISCOVERED.value, 0),
+            "new_count": today_new,
             "cards": cards,
         },
         "counts": counts,
