@@ -1,0 +1,45 @@
+{
+  "label": "行业周期反转型（规格示例 H）",
+  "thesis_type": "cycle",
+  "expect": {
+    "entry": "industry_first",
+    "note": "必须能「先发现行业机会，再向下寻找公司」"
+  },
+  "profile_weights": {
+    "cycle": 0.4,
+    "turnaround": 0.25
+  },
+  "company": {
+    "name": "公司 H",
+    "code": "000hhh",
+    "is_st": false,
+    "industry": "化工",
+    "industry_chain": [
+      "基础化工",
+      "氯碱"
+    ]
+  },
+  "financials": {
+    "loss_years": 2,
+    "ocf_positive": true
+  },
+  "open_question_count": 4,
+  "evidence_levels": [
+    "B"
+  ],
+  "newest_evidence_age_days": 5.0,
+  "events": [
+    {
+      "event_type": "OTHER",
+      "title": "行业库存与开工率数据月度跟踪",
+      "event_time": "2026-09-08T11:32:00+00:00",
+      "evidence_level": "B"
+    },
+    {
+      "event_type": "EARNINGS_TURNAROUND",
+      "title": "2026 年半年度业绩预告",
+      "event_time": "2026-09-08T11:32:00+00:00",
+      "evidence_level": "B"
+    }
+  ]
+}

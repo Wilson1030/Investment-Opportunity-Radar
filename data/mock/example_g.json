@@ -1,0 +1,46 @@
+{
+  "label": "大股东增持 / 回购型（规格示例 G）",
+  "thesis_type": "shareholder_action",
+  "expect": {
+    "note": "不能只做正向判断：必须检查资金来源 / 规模 / 质押 / 历史表现",
+    "risk_trigger": "hunt_risk 至少输出 3 项反向结论"
+  },
+  "profile_weights": {
+    "shareholder_action": 0.35,
+    "value": 0.3
+  },
+  "company": {
+    "name": "公司 G",
+    "code": "000ggg",
+    "is_st": false
+  },
+  "financials": {
+    "profitable_years": 5,
+    "ocf_positive": true
+  },
+  "shareholder": {
+    "insider_buy": true,
+    "buyback": true,
+    "buyback_scale_significant": true,
+    "high_pledge": true
+  },
+  "open_question_count": 4,
+  "evidence_levels": [
+    "A"
+  ],
+  "newest_evidence_age_days": 0.5,
+  "events": [
+    {
+      "event_type": "SHAREHOLDER_BUY",
+      "title": "关于控股股东增持公司股份计划的公告",
+      "event_time": "2026-09-08T11:32:00+00:00",
+      "evidence_level": "A"
+    },
+    {
+      "event_type": "BUYBACK",
+      "title": "关于回购公司股份的进展公告",
+      "event_time": "2026-09-08T11:32:00+00:00",
+      "evidence_level": "A"
+    }
+  ]
+}

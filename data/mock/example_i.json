@@ -1,0 +1,40 @@
+{
+  "label": "技术 / 新产品突破型（规格示例 I）",
+  "thesis_type": "product",
+  "expect": {
+    "gating": "C3（客户验证）未命中 → C4 / C5 一律计 0",
+    "note": "不能把「宣布研发成功」等同于「商业成功」"
+  },
+  "core_condition_satisfaction": {
+    "C1": 1.0,
+    "C2": 1.0,
+    "C3": 0.0,
+    "C4": 0.0,
+    "C5": 0.0
+  },
+  "profile_weights": {
+    "product": 0.35,
+    "growth": 0.3
+  },
+  "company": {
+    "name": "公司 I",
+    "code": "000iii",
+    "is_st": false
+  },
+  "financials": {
+    "loss_years": 1
+  },
+  "open_question_count": 4,
+  "evidence_levels": [
+    "A"
+  ],
+  "newest_evidence_age_days": 1.0,
+  "events": [
+    {
+      "event_type": "NEW_PRODUCT",
+      "title": "关于新产品获得认证的公告",
+      "event_time": "2026-09-08T11:32:00+00:00",
+      "evidence_level": "A"
+    }
+  ]
+}

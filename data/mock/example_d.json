@@ -1,0 +1,43 @@
+{
+  "label": "成长型（规格示例 D）",
+  "thesis_type": "growth",
+  "expect": {
+    "note": "需要行业数据 / 订单 / 产能利用率 / 份额 —— 不是只看股价"
+  },
+  "profile_weights": {
+    "growth": 0.4,
+    "product": 0.25
+  },
+  "company": {
+    "name": "公司 D",
+    "code": "000ddd",
+    "is_st": false
+  },
+  "financials": {
+    "revenue_improving_quarters": 4,
+    "profitable_years": 3,
+    "ocf_positive": true,
+    "ocf_improving": true
+  },
+  "open_question_count": 3,
+  "evidence_levels": [
+    "B",
+    "A"
+  ],
+  "newest_evidence_age_days": 1.0,
+  "events": [
+    {
+      "event_type": "MAJOR_CONTRACT",
+      "title": "关于新签订单的自愿性披露公告",
+      "event_time": "2026-09-08T11:32:00+00:00",
+      "evidence_level": "A",
+      "amount_ratio": 0.35
+    },
+    {
+      "event_type": "NEW_PRODUCT",
+      "title": "关于新产品投产的公告",
+      "event_time": "2026-09-08T11:32:00+00:00",
+      "evidence_level": "B"
+    }
+  ]
+}

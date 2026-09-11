@@ -1,0 +1,117 @@
+{
+  "generated_by": "tools/build_mock_data.py",
+  "source": "产品设计规格 §5.6 示例 A ~ J",
+  "purpose": [
+    "端到端回归用例（docs/07 §4.2）",
+    "example_j 验证：策略决定为什么被发现，而不是标签决定策略",
+    "example_e / example_i 验证：顺序门控在数据层就无法被绕过"
+  ],
+  "examples": [
+    {
+      "file": "example_a.json",
+      "label": "重组预期型（规格示例 A）",
+      "thesis_type": "restructuring",
+      "is_st": true,
+      "expect": {
+        "status": "pending_confirmation",
+        "coverage": 0.94,
+        "match_score": 94.0,
+        "rule_score": 67.5875
+      }
+    },
+    {
+      "file": "example_b.json",
+      "label": "业绩拐点型（规格示例 B）",
+      "thesis_type": "turnaround",
+      "is_st": false,
+      "expect": {
+        "status": "tracking"
+      }
+    },
+    {
+      "file": "example_c.json",
+      "label": "高股息 / 现金流型（规格示例 C）",
+      "thesis_type": "value",
+      "is_st": false,
+      "expect": {
+        "note": "「事件」可以是分红+回购+现金流+估值的组合，无需重大新闻"
+      }
+    },
+    {
+      "file": "example_d.json",
+      "label": "成长型（规格示例 D）",
+      "thesis_type": "growth",
+      "is_st": false,
+      "expect": {
+        "note": "需要行业数据 / 订单 / 产能利用率 / 份额 —— 不是只看股价"
+      }
+    },
+    {
+      "file": "example_e.json",
+      "label": "政策驱动型（规格示例 E）",
+      "thesis_type": "policy",
+      "is_st": false,
+      "expect": {
+        "gating": "C5 未命中时 coverage 上限 0.45",
+        "note": "不能仅因「属于政策相关行业」就判定为机会"
+      }
+    },
+    {
+      "file": "example_f.json",
+      "label": "并购 / 产业整合型（规格示例 F）",
+      "thesis_type": "ma_integration",
+      "is_st": false,
+      "expect": {
+        "note": "「发生并购」≠ 好机会：必须同时分析 催化剂 + 交易质量 + 风险",
+        "open_questions": [
+          "收购价格",
+          "商誉风险",
+          "业绩承诺",
+          "整合难度"
+        ]
+      }
+    },
+    {
+      "file": "example_g.json",
+      "label": "大股东增持 / 回购型（规格示例 G）",
+      "thesis_type": "shareholder_action",
+      "is_st": false,
+      "expect": {
+        "note": "不能只做正向判断：必须检查资金来源 / 规模 / 质押 / 历史表现",
+        "risk_trigger": "hunt_risk 至少输出 3 项反向结论"
+      }
+    },
+    {
+      "file": "example_h.json",
+      "label": "行业周期反转型（规格示例 H）",
+      "thesis_type": "cycle",
+      "is_st": false,
+      "expect": {
+        "entry": "industry_first",
+        "note": "必须能「先发现行业机会，再向下寻找公司」"
+      }
+    },
+    {
+      "file": "example_i.json",
+      "label": "技术 / 新产品突破型（规格示例 I）",
+      "thesis_type": "product",
+      "is_st": false,
+      "expect": {
+        "gating": "C3（客户验证）未命中 → C4 / C5 一律计 0",
+        "note": "不能把「宣布研发成功」等同于「商业成功」"
+      }
+    },
+    {
+      "file": "example_j.json",
+      "label": "困境反转型，但不依赖 ST（规格示例 J）★ 最重要的一条回归",
+      "thesis_type": "turnaround",
+      "is_st": false,
+      "expect": {
+        "coverage": 0.8,
+        "is_st": false,
+        "note": "非 ST 公司也能命中困境反转 —— 验证「投资策略应该决定股票为什么被发现，而不是股票标签决定投资策略」（规格 §5.6）"
+      }
+    }
+  ],
+  "note": "全部公司、代码与数据均为虚构示例，不构成任何投资建议。"
+}

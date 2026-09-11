@@ -1,0 +1,43 @@
+{
+  "label": "业绩拐点型（规格示例 B）",
+  "thesis_type": "turnaround",
+  "expect": {
+    "status": "tracking"
+  },
+  "profile_weights": {
+    "turnaround": 0.4,
+    "restructuring": 0.25
+  },
+  "company": {
+    "name": "公司 B",
+    "code": "000bbb",
+    "is_st": false
+  },
+  "financials": {
+    "loss_years": 2,
+    "revenue_improving_quarters": 2,
+    "margin_improving_quarters": 2,
+    "ocf_positive": true,
+    "ocf_improving": true
+  },
+  "open_question_count": 4,
+  "evidence_levels": [
+    "B",
+    "B"
+  ],
+  "newest_evidence_age_days": 1.0,
+  "events": [
+    {
+      "event_type": "EARNINGS_TURNAROUND",
+      "title": "2026 年半年度业绩预告",
+      "event_time": "2026-09-08T11:32:00+00:00",
+      "evidence_level": "B"
+    },
+    {
+      "event_type": "MAJOR_CONTRACT",
+      "title": "关于签订重大合同的公告",
+      "event_time": "2026-09-08T11:32:00+00:00",
+      "evidence_level": "A"
+    }
+  ]
+}

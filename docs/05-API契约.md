@@ -204,8 +204,8 @@ freshness       : new | updated | breaking | stale
   "status_label": "待确认",
 
   "match_score": 94,
-  "rule_score": 69,
-  "risk_score": 43,
+  "rule_score": 67.59,
+  "risk_score": 40.75,
   "semantic_score": 76,
   "divergence": 7,
   "divergence_flagged": false,
@@ -346,11 +346,11 @@ freshness       : new | updated | breaking | stale
 ```jsonc
 {
   "data": {
-    "rule_score": 69,
+    "rule_score": 67.59,
     "semantic_score": 76,
     "divergence": 7,
     "divergence_flagged": false,
-    "risk_score": 43,
+    "risk_score": 40.75,
     "risk_penalty": -6.45,
     "score_version": "rules-1.0+weights-restructuring-1.0",
     "computed_at": "2026-09-11T07:20:00Z",
@@ -547,7 +547,7 @@ freshness       : new | updated | breaking | stale
         "thesis_type": "restructuring",
         "statement": "公司处于 ST 状态，同时出现重大资产重组及控制权变化，因此存在潜在重组预期。",
         "status": "pending_confirmation",
-        "rule_score": 69, "risk_score": 43,
+        "rule_score": 67.59, "risk_score": 40.75,
         "evidence_count": 3, "contradictory_count": 2, "open_question_count": 4,
         "invalidating_events": ["重组终止", "重大资产重组失败", "控股权变化取消"],
         "last_updated_at": "2026-09-11T07:20:00Z",

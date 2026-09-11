@@ -57,3 +57,8 @@ Thumbs.db
 # --- 日志 ---
 *.log
 logs/
+
+# --- 前端构建产物 ---
+frontend/dist/
+frontend/node_modules/
+frontend/.tsbuildinfo

@@ -1,0 +1,63 @@
+{
+  "label": "重组预期型（规格示例 A）",
+  "thesis_type": "restructuring",
+  "expect": {
+    "status": "pending_confirmation",
+    "coverage": 0.94,
+    "match_score": 94.0,
+    "rule_score": 67.5875
+  },
+  "profile_weights": {
+    "restructuring": 0.4,
+    "ma_integration": 0.25,
+    "turnaround": 0.15
+  },
+  "company": {
+    "name": "ST XXX",
+    "code": "600xxx",
+    "is_st": true,
+    "industry": "机械设备"
+  },
+  "financials": {
+    "loss_years": 2,
+    "ocf_positive": true
+  },
+  "shareholder": {
+    "controlling_shareholder_changed": true
+  },
+  "market": {
+    "abnormal_volatility": true,
+    "social_buzz": true
+  },
+  "open_question_count": 6,
+  "has_unanswered_inquiry": true,
+  "has_history_failure": true,
+  "evidence_levels": [
+    "A",
+    "A",
+    "A"
+  ],
+  "newest_evidence_age_days": 0.5,
+  "events": [
+    {
+      "event_type": "RESTRUCTURING",
+      "title": "重大资产重组预案公告",
+      "event_time": "2026-09-08T11:32:00+00:00",
+      "evidence_level": "A",
+      "amount_ratio": 0.2,
+      "counterparty_known": true
+    },
+    {
+      "event_type": "CONTROL_CHANGE",
+      "title": "关于控股股东变更的公告",
+      "event_time": "2026-09-08T11:32:00+00:00",
+      "evidence_level": "A"
+    },
+    {
+      "event_type": "ASSET_INJECTION",
+      "title": "关于资产注入的进展公告",
+      "event_time": "2026-09-08T11:32:00+00:00",
+      "evidence_level": "A"
+    }
+  ]
+}

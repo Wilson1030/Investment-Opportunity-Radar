@@ -1,0 +1,71 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    @apply bg-bg text-text font-sans antialiased;
+    /* 深色底下的可读性：正文行高 ≥ 1.7 */
+    line-height: 1.75;
+    font-size: 14px;
+  }
+
+  /* 数字一律等宽 + tabular-nums：分数与日期不跳动 */
+  .num {
+    @apply font-mono;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.01em;
+  }
+
+  ::selection {
+    background: #2dd4bf33;
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: #0b0e11;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #1f262e;
+    border-radius: 5px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: #2a333e;
+  }
+}
+
+@layer components {
+  /* 面板：用描边 + 细线分隔，而不是阴影（研究终端质感） */
+  .panel {
+    @apply bg-panel border border-border rounded-panel;
+  }
+  .panel-2 {
+    @apply bg-panel-2 border border-border rounded-panel;
+  }
+  .hairline {
+    @apply border-t border-border;
+  }
+  .label {
+    @apply text-2xs uppercase tracking-widest text-faint;
+  }
+  .btn {
+    @apply px-3 py-1.5 text-xs border border-border-strong text-muted
+           hover:text-text hover:border-accent-dim transition-colors rounded-sm;
+  }
+  .btn-primary {
+    @apply px-3 py-1.5 text-xs border border-accent-dim bg-accent/10 text-accent
+           hover:bg-accent/20 transition-colors rounded-sm;
+  }
+  .chip {
+    @apply inline-flex items-center gap-1 px-1.5 py-0.5 text-2xs border rounded-sm;
+  }
+}

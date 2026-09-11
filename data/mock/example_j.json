@@ -1,0 +1,53 @@
+{
+  "label": "困境反转型，但不依赖 ST（规格示例 J）★ 最重要的一条回归",
+  "thesis_type": "turnaround",
+  "expect": {
+    "coverage": 0.8,
+    "is_st": false,
+    "note": "非 ST 公司也能命中困境反转 —— 验证「投资策略应该决定股票为什么被发现，而不是股票标签决定投资策略」（规格 §5.6）"
+  },
+  "profile_weights": {
+    "turnaround": 0.4,
+    "cycle": 0.2
+  },
+  "company": {
+    "name": "公司 J",
+    "code": "000jjj",
+    "is_st": false,
+    "industry": "建材"
+  },
+  "financials": {
+    "loss_years": 2,
+    "ocf_positive": true,
+    "ocf_improving": true,
+    "margin_improving_quarters": 2,
+    "revenue_improving_quarters": 2
+  },
+  "shareholder": {},
+  "open_question_count": 3,
+  "evidence_levels": [
+    "B",
+    "B"
+  ],
+  "newest_evidence_age_days": 2.0,
+  "events": [
+    {
+      "event_type": "EARNINGS_TURNAROUND",
+      "title": "2026 年半年度业绩预告",
+      "event_time": "2026-09-08T11:32:00+00:00",
+      "evidence_level": "B"
+    },
+    {
+      "event_type": "M&A",
+      "title": "关于剥离亏损子公司股权的公告",
+      "event_time": "2026-09-08T11:32:00+00:00",
+      "evidence_level": "A"
+    },
+    {
+      "event_type": "MANAGEMENT_CHANGE",
+      "title": "关于聘任总经理的公告",
+      "event_time": "2026-09-08T11:32:00+00:00",
+      "evidence_level": "A"
+    }
+  ]
+}

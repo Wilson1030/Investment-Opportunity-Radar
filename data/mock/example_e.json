@@ -1,0 +1,43 @@
+{
+  "label": "政策驱动型（规格示例 E）",
+  "thesis_type": "policy",
+  "expect": {
+    "gating": "C5 未命中时 coverage 上限 0.45",
+    "note": "不能仅因「属于政策相关行业」就判定为机会"
+  },
+  "core_condition_satisfaction": {
+    "C1": 1.0,
+    "C2": 1.0,
+    "C3": 1.0,
+    "C4": 0.6,
+    "C5": 0.0
+  },
+  "coverage_cap": 0.45,
+  "profile_weights": {
+    "policy": 0.45,
+    "growth": 0.25
+  },
+  "company": {
+    "name": "公司 E",
+    "code": "000eee",
+    "is_st": false,
+    "industry": "新能源",
+    "industry_chain": [
+      "储能",
+      "电池材料"
+    ]
+  },
+  "open_question_count": 4,
+  "evidence_levels": [
+    "A"
+  ],
+  "newest_evidence_age_days": 2.0,
+  "events": [
+    {
+      "event_type": "POLICY_CATALYST",
+      "title": "关于某产业支持政策的通知",
+      "event_time": "2026-09-08T11:32:00+00:00",
+      "evidence_level": "A"
+    }
+  ]
+}

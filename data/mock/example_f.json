@@ -1,0 +1,41 @@
+{
+  "label": "并购 / 产业整合型（规格示例 F）",
+  "thesis_type": "ma_integration",
+  "expect": {
+    "note": "「发生并购」≠ 好机会：必须同时分析 催化剂 + 交易质量 + 风险",
+    "open_questions": [
+      "收购价格",
+      "商誉风险",
+      "业绩承诺",
+      "整合难度"
+    ]
+  },
+  "profile_weights": {
+    "ma_integration": 0.4,
+    "restructuring": 0.2
+  },
+  "company": {
+    "name": "公司 F",
+    "code": "000fff",
+    "is_st": false
+  },
+  "financials": {
+    "profitable_years": 4,
+    "ocf_positive": true
+  },
+  "open_question_count": 8,
+  "evidence_levels": [
+    "A"
+  ],
+  "newest_evidence_age_days": 1.0,
+  "events": [
+    {
+      "event_type": "M&A",
+      "title": "关于收购同行业公司股权的公告",
+      "event_time": "2026-09-08T11:32:00+00:00",
+      "evidence_level": "A",
+      "amount_ratio": 0.45,
+      "counterparty_known": true
+    }
+  ]
+}

@@ -1,0 +1,44 @@
+{
+  "label": "高股息 / 现金流型（规格示例 C）",
+  "thesis_type": "value",
+  "expect": {
+    "note": "「事件」可以是分红+回购+现金流+估值的组合，无需重大新闻"
+  },
+  "profile_weights": {
+    "value": 0.4,
+    "shareholder_action": 0.2
+  },
+  "company": {
+    "name": "公司 C",
+    "code": "000ccc",
+    "is_st": false
+  },
+  "financials": {
+    "profitable_years": 8,
+    "ocf_positive": true
+  },
+  "shareholder": {
+    "buyback": true,
+    "buyback_scale_significant": true
+  },
+  "valuation_percentile": 0.25,
+  "open_question_count": 2,
+  "evidence_levels": [
+    "B"
+  ],
+  "newest_evidence_age_days": 3.0,
+  "events": [
+    {
+      "event_type": "DIVIDEND_POLICY",
+      "title": "关于提高现金分红比例的公告",
+      "event_time": "2026-09-08T11:32:00+00:00",
+      "evidence_level": "A"
+    },
+    {
+      "event_type": "BUYBACK",
+      "title": "关于回购公司股份方案的公告",
+      "event_time": "2026-09-08T11:32:00+00:00",
+      "evidence_level": "A"
+    }
+  ]
+}
