@@ -117,6 +117,7 @@ class CninfoAdapter:
         *,
         page_size: int = 30,
         max_pages: int = 20,
+        searchkey: str = "",
     ) -> FetchResult:
         """**全市场**按日查询公告 —— 事件优先入口（规格 §5.9 / §27）。
 
@@ -125,6 +126,10 @@ class CninfoAdapter:
 
         这条路不依赖 akshare（东方财富）—— 实测该源在本环境不可达，
         而 cninfo 可用，因此候选池改为「从市场发生了什么开始」。
+
+        ``searchkey`` 是 cninfo 的**全文检索**。它在两个场景下很有用：
+          * 抽样核对：精确捞到「重大资产重组」这类偶发公告（6 天窗口可能一条都没有）
+          * 定向扫描：只关心某类事件时，避免翻遍全市场
         """
         result = FetchResult()
         for page_number in range(1, max_pages + 1):
@@ -135,7 +140,7 @@ class CninfoAdapter:
                 "tabName": "fulltext",
                 "plate": "",
                 "stock": "",
-                "searchkey": "",
+                "searchkey": searchkey,
                 "secid": "",
                 "category": "",
                 "trade": "",

@@ -206,6 +206,39 @@ def test_healthy_case_breakdown_is_reproducible(pipeline_outcome, engine):
     assert raw["risk"] == pytest.approx(29.25)
 
 
+def test_evidence_decay_is_deterministic_not_wallclock_dependent(pipeline_outcome, engine):
+    """★ 守卫：mock 场景的新鲜度必须固定在「≤1 天」，衰减系数恒为 1.00。
+
+    曾经踩过的坑：mock 用硬编码绝对日期，而衰减用真实时钟算，
+    于是随着日历推进，``EVENT_CATALYST`` 会从 75 悄悄变成 63.75（×0.85）。
+    这种「期望值随日历漂移」的测试比没有测试更糟 —— 所以要显式锁住。
+    """
+    from app.engine.freshness import decay_factor
+
+    healthy = next(r for r in pipeline_outcome.opportunities if r.created and not r.invalidated)
+    with Session(engine) as s:
+        opportunity = s.get(Opportunity, healthy.opportunity_id)
+    assert opportunity is not None
+
+    # 分档边界（docs/04 §5）
+    assert decay_factor(0.25) == pytest.approx(1.00)
+    assert decay_factor(1.5) == pytest.approx(0.85)
+    assert decay_factor(5.0) == pytest.approx(0.70)
+    assert decay_factor(45.0) == pytest.approx(0.30)
+
+    with Session(engine) as s:
+        rows = s.exec(
+            select(OpportunityScore).where(
+                OpportunityScore.opportunity_id == opportunity.id
+            )
+        ).all()
+    raw = {str(r.dimension.value if hasattr(r.dimension, "value") else r.dimension): r.raw_value
+           for r in rows}
+    # 未衰减时的原始值：事件催化 75、市场关注 40
+    assert raw["event_catalyst"] == pytest.approx(75.0), "衰减系数不是 1.00（时间戳可能又变成绝对日期了）"
+    assert raw["market_attention"] == pytest.approx(40.0)
+
+
 def test_one_off_attribution_reduces_risk_not_fundamentals(pipeline_outcome, engine):
     """INV-F1 在真实数据上的验证：亏损已归因于一次性因素 → 风险降低，基本面照实计算。"""
     healthy = next(r for r in pipeline_outcome.opportunities if r.created and not r.invalidated)

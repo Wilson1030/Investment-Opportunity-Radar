@@ -88,6 +88,8 @@ class PipelineOptions:
     market_pages: int = 20
     #: 单条公告送入 LLM 的最大字符数（None = 用 settings 默认值）
     max_input_chars: int | None = None
+    #: cninfo 全文检索关键词（空 = 不检索，取全市场）
+    searchkey: str = ""
     lookback_days: int | None = None
     profile_template: str | None = profile_seed.DEFAULT_TEMPLATE
 
@@ -323,14 +325,16 @@ def _collect_market_first(
     漏斗：全市场数千条/3 天 → 命中白名单的少数条 → 去重后的候选公司。
     """
     fetched = adapter.list_market_announcements(
-        start, end, page_size=30, max_pages=options.market_pages
+        start, end, page_size=30, max_pages=options.market_pages,
+        searchkey=options.searchkey,
     )
     for error in fetched.errors:
         report.add_error(error.get("stage", "cninfo"), error.get("error", ""))
 
     report.funnel.record("announcements_fetched", len(fetched.items))
+    scope_label = f"全文检索「{options.searchkey}」" if options.searchkey else "全市场扫描"
     print(
-        f"[cninfo] 全市场扫描 {start} ~ {end}：{len(fetched.items)} 条公告"
+        f"[cninfo] {scope_label} {start} ~ {end}：{len(fetched.items)} 条公告"
         f"（{options.market_pages} 页 × 30；查询错误 {len(fetched.errors)} 条）"
     )
 
@@ -528,17 +532,31 @@ def _extract_events(
             #   但抽取质量恰恰是 dry-run 最需要被看见的东西
             report.funnel.increment("events_extracted")
 
+        rule_type = (
+            announcement.event_type.value
+            if hasattr(announcement.event_type, "value")
+            else str(announcement.event_type or "")
+        )
         outcome.extractions.append({
             "document_id": announcement.document_id,
-            "announcement_title": announcement.title[:60],
+            "company_code": _company_code(session, announcement),
+            "announcement_title": announcement.title,
+            # ★ 规则层与 LLM 层的判定都要留下：抽样核对时既要知道结论，也要知道分歧
+            "rule_event_type": rule_type,
             "event_type": result.event_type,
-            "title": result.title[:60],
+            "agreement": bool(rule_type) and rule_type == result.event_type,
+            "title": result.title,
             "gate_passed": result.gate_passed,
             "accepted_slices": result.accepted_slices,
+            "accepted_texts": [
+                {"page": page, "para_index": para, "text": text}
+                for page, para, text in result.accepted_texts
+            ],
             "rejected": [{"at": at, "reason": reason} for at, reason in result.rejected_slices],
             "event_time_source": result.event_time_source,
             "persisted": result.created,
             "skipped_reason": result.skipped_reason,
+            "source_url": announcement.source_url,
         })
 
         if result.skipped_reason and "证据全部被拒" in result.skipped_reason:
@@ -559,6 +577,13 @@ def _extract_events(
         report.quality.llm_schema_failure_rate = runner.stats["schema_failure_rate"]
         report.quality.llm_cached_rate = runner.stats["cached_rate"]
         report.llm_ms = sum(r.latency_ms or 0 for r in runner.log)
+
+
+def _company_code(session, announcement) -> str:
+    stock = session.exec(
+        select(Stock).where(Stock.company_id == announcement.company_id)
+    ).first()
+    return stock.code if stock else ""
 
 
 def _truncate_paragraphs(announcement, paragraphs, max_chars: int, max_paragraphs: int):
@@ -723,6 +748,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="market-wide query pages (30 announcements each)")
     parser.add_argument("--max-chars", type=int, default=None,
                         help="max characters per announcement sent to the LLM")
+    parser.add_argument("--searchkey", default="",
+                        help="cninfo full-text search (e.g. 重大资产重组)")
     parser.add_argument("--no-llm", action="store_true", help="只采集不抽取（调试用）")
     args = parser.parse_args(argv)
 
@@ -738,6 +765,7 @@ def main(argv: list[str] | None = None) -> int:
         pool=args.pool,
         market_pages=args.market_pages,
         max_input_chars=args.max_chars,
+        searchkey=args.searchkey,
     ))
 
     payload = outcome.to_dict()

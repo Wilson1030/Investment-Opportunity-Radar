@@ -39,6 +39,8 @@ class EventWriteResult:
     event_time_source: str = "disclosed"
     event_type: str | None = None
     title: str = ""
+    #: 通过闸门的证据原文（含页码段落号）—— 人工核对分类是否正确时要看它
+    accepted_texts: tuple[tuple[int, int, str], ...] = ()
 
     @property
     def gate_passed(self) -> bool:
@@ -174,6 +176,9 @@ def persist_extraction(
             event_time_source=time_source,
             event_type=str(extraction.event_type),
             title=extraction.title or announcement.title,
+            accepted_texts=tuple(
+                (s.page, s.para_index, s.relevant_text) for s in decision.accepted
+            ),
         )
 
     # ---- Evidence ----
@@ -240,6 +245,9 @@ def persist_extraction(
         event_time_source=time_source,
         event_type=str(extraction.event_type),
         title=extraction.title or announcement.title,
+        accepted_texts=tuple(
+            (s.page, s.para_index, s.relevant_text) for s in decision.accepted
+        ),
     )
 
 

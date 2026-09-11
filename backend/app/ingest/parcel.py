@@ -18,11 +18,95 @@ from app.models.enums import ParseStatus
 #: 段落切分的最小长度（过短的碎片对证据链无意义）
 MIN_PARAGRAPH_CHARS = 12
 
+#: 合并换行时，单块的最大长度（超过则强制断开，避免整篇变成一段）
+MAX_BLOCK_CHARS = 420
+
 #: 页码 / 页眉页脚样式的噪声行
 _NOISE = re.compile(
     r"^\s*(第?\s*\d+\s*页|共\s*\d+\s*页|证券代码[:：]|证券简称[:：]|公告编号[:：]|\d{1,3})\s*$"
 )
 _SENTENCE_SPLIT = re.compile(r"(?<=[。；！？])")
+
+#: 句末标点 —— 行尾出现它才认为这一句说完了（可以断开）
+_SENTENCE_END = re.compile(r"[。！？；：”』】）)]\s*$")
+
+#: 小标题样式（「一、」「1.」「（2）」开头）—— 它们本身就是块边界
+_HEADING = re.compile(r"^\s*(?:[一二三四五六七八九十]+[、.]|\d+[、.．]|（\d+）|\(\d+\))")
+
+#: 文种标题行（「关于……的公告 / 通知 / 报告 / 说明」）—— 独立成块：
+#: 这类标题不含句末标点，若按常规合并会与正文粘在一起；
+#: 而它本身常常是判断事件类型最直接、最可引用的一行。
+_TITLE_LINE = re.compile(r"^[^。！？；]{4,40}?(?:公告|通知|报告书|报告|说明书|说明|提示性公告|进展公告)$")
+
+#: 页眉元信息行（证券代码 / 证券简称 / 公告编号）—— 整行丢弃：
+#: 它不含证据价值，却会污染证据片段（让人以为引用的是正文）
+_HEADER_META = re.compile(
+    r"^\s*(?:证券代码|证券简称|股票代码|股票简称|公告编号|债券代码|债券简称)\s*[:：]"
+)
+
+
+def join_wrapped_lines(text: str) -> list[str]:
+    """把被硬换行切断的行回接成完整句块。
+
+    **为什么必须做**：cninfo 的公告 PDF 多为分栏 / 文本框排版，
+    ``extract_text()`` 出来的是大量短行。若按 ``\n`` 直接切段，会得到
+    「组管理办法》规定的重大资产重组」这种碎片 —— 子串校验能过，
+    但人没法读，证据链的核对价值就没了。
+
+    规则：累积行直到「行尾是句末标点」或「块长超过上限」或「遇到小标题」。
+    """
+    blocks: list[str] = []
+    buffer = ""
+
+    for raw_line in text.split("\n"):
+        line = raw_line.strip()
+        if not line or _NOISE.match(line) or _HEADER_META.match(line):
+            if buffer:
+                blocks.append(buffer)
+                buffer = ""
+            continue
+
+        # 文种标题独立成块
+        if _TITLE_LINE.match(line):
+            if buffer:
+                blocks.append(buffer)
+            blocks.append(line)
+            buffer = ""
+            continue
+
+        # 小标题自成一块：它本身不含证据价值（通常短于 MIN_PARAGRAPH_CHARS 会被丢弃），
+        # 但必须断开，否则会与后面的正文粘成「三、风险提示本次交易尚需……」这种别扭的段落
+        if _HEADING.match(line):
+            if buffer:
+                blocks.append(buffer)
+            blocks.append(line)
+            buffer = ""
+            continue
+
+        buffer = f"{buffer}{line}" if buffer else line
+
+        if _SENTENCE_END.search(line) or len(buffer) >= MAX_BLOCK_CHARS:
+            blocks.append(buffer)
+            buffer = ""
+
+    if buffer:
+        blocks.append(buffer)
+
+    # 单行就可能超过上限（PDF 有时把整段吐成一行）——必须在这里也断开，
+    # 否则「整篇变成一段」，后续按句切分也救不回来
+    bounded: list[str] = []
+    for block in blocks:
+        if len(block) <= MAX_BLOCK_CHARS:
+            bounded.append(block)
+            continue
+        for piece in _SENTENCE_SPLIT.split(block):
+            piece = piece.strip()
+            if not piece:
+                continue
+            # 仍然过长（整段没有句末标点）→ 硬切，保证任何块都可读
+            for offset in range(0, len(piece), MAX_BLOCK_CHARS):
+                bounded.append(piece[offset : offset + MAX_BLOCK_CHARS])
+    return bounded
 
 
 def split_text_to_paragraphs(
@@ -37,11 +121,10 @@ def split_text_to_paragraphs(
     cursor = 0
     index = start_index
 
-    for raw_block in re.split(r"\n{1,}", text or ""):
-        block = raw_block.strip()
-        if not block or _NOISE.match(block):
-            continue
-        chunks = [block] if len(block) <= 220 else [
+    # ① 先把被硬换行切断的行回接成完整句块（PDF 分栏排版的必要处理）
+    for block in join_wrapped_lines(text or ""):
+        # ② 仍然过长的块按句号再切（保持单段可读）
+        chunks = [block] if len(block) <= MAX_BLOCK_CHARS else [
             c.strip() for c in _SENTENCE_SPLIT.split(block) if c.strip()
         ]
         for chunk in chunks:
@@ -132,7 +215,9 @@ def parse_html(html: str) -> ParsedDocument:
 
 
 __all__ = [
+    "MAX_BLOCK_CHARS",
     "MIN_PARAGRAPH_CHARS",
+    "join_wrapped_lines",
     "parse_html",
     "parse_pdf",
     "split_text_to_paragraphs",

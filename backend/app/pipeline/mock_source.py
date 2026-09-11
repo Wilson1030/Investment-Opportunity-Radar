@@ -31,7 +31,14 @@ from app.models.enums import CertaintyLevel, EventType, ParseStatus, Reliability
 from app.models.knowledge import Announcement, Company, FinancialMetric, FinancialPeriod, Stock
 
 SOURCE_NAME = "mock"
-NOW = datetime(2026, 9, 11, 7, 0, tzinfo=timezone.utc)
+
+#: ⚠ 时间戳必须相对于**当前时刻**，不能用硬编码的绝对日期。
+#: 原因：时效衰减（docs/04 §5）是拿真实时钟算的（``newest_evidence_age_days``），
+#: 若 mock 用固定日期，随着真实时间跨过 1 天/3 天边界，
+#: ``EVENT_CATALYST`` 与 ``MARKET_ATTENTION`` 会自己变（实测 75→63.75、40→34），
+#: 使回归测试的期望值随日历漂移 —— 这种测试比没有测试更糟。
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 @dataclass(frozen=True)
@@ -41,7 +48,10 @@ class MockAnnouncement:
     is_st: bool
     document_id: str
     title: str
-    days_ago: int
+    #: 小时数（而不是天数）：时效衰减的分档边界在 1/3/7/30 天，
+    #: 若用整天数，处理耗时几秒就会把年龄推过边界（1.0000 → 1.0002 天），
+    #: 使期望值在 1.00 与 0.85 之间跳变。用小时并让最新一条远离边界即可稳定。
+    hours_ago: int
     text: str
 
 
@@ -52,7 +62,7 @@ MOCK_ANNOUNCEMENTS: tuple[MockAnnouncement, ...] = (
         is_st=True,
         document_id="MOCK-600xxx-01",
         title="关于重大资产重组预案暨控股股东变更的公告",
-        days_ago=2,
+        hours_ago=52,
         text=(
             "证券代码：600xxx  证券简称：ST XXX  公告编号：2026-088\n"
             "关于重大资产重组预案暨控股股东变更的公告\n"
@@ -74,7 +84,7 @@ MOCK_ANNOUNCEMENTS: tuple[MockAnnouncement, ...] = (
         is_st=True,
         document_id="MOCK-600xxx-02",
         title="关于收到交易所对重大资产重组事项问询函的公告",
-        days_ago=1,
+        hours_ago=20,
         text=(
             "证券代码：600xxx  证券简称：ST XXX  公告编号：2026-091\n"
             "关于收到交易所对重大资产重组事项问询函的公告\n"
@@ -90,7 +100,7 @@ MOCK_ANNOUNCEMENTS: tuple[MockAnnouncement, ...] = (
         is_st=True,
         document_id="MOCK-600xxx-03",
         title="关于拟置入资产的进展公告",
-        days_ago=3,
+        hours_ago=68,
         text=(
             "证券代码：600xxx  证券简称：ST XXX  公告编号：2026-086\n"
             "关于拟置入资产的进展公告\n"
@@ -105,7 +115,7 @@ MOCK_ANNOUNCEMENTS: tuple[MockAnnouncement, ...] = (
         is_st=True,
         document_id="MOCK-600xxx-04",
         title="关于重大资产重组报告书（草案）的公告",
-        days_ago=1,
+        hours_ago=6,
         text=(
             "证券代码：600xxx  证券简称：ST XXX  公告编号：2026-093\n"
             "关于重大资产重组报告书（草案）的公告\n"
@@ -120,7 +130,7 @@ MOCK_ANNOUNCEMENTS: tuple[MockAnnouncement, ...] = (
         is_st=False,
         document_id="MOCK-000jjj-01",
         title="2026 年半年度业绩预告",
-        days_ago=4,
+        hours_ago=92,
         text=(
             "证券代码：000jjj  证券简称：公司 J  公告编号：2026-040\n"
             "2026 年半年度业绩预告\n"
@@ -138,7 +148,7 @@ MOCK_ANNOUNCEMENTS: tuple[MockAnnouncement, ...] = (
         is_st=True,
         document_id="MOCK-000yyy-01",
         title="关于终止重大资产重组的公告",
-        days_ago=1,
+        hours_ago=10,
         text=(
             "证券代码：000yyy  证券简称：ST YYY  公告编号：2026-055\n"
             "关于终止重大资产重组的公告\n"
@@ -245,7 +255,7 @@ def _raw(item: MockAnnouncement):
         document_id=item.document_id,
         title=item.title,
         announcement_type=None,
-        publication_time=NOW - timedelta(days=item.days_ago),
+        publication_time=_now() - timedelta(hours=item.hours_ago),
         url=f"http://mock.local/{item.document_id}.html",
         source=SOURCE_NAME,
     )
@@ -267,7 +277,7 @@ def _upsert_period(session: Session, company_id: int, period: str) -> int | None
         period_end=datetime(year, 12 if report_type == "annual" else 6,
                             30 if report_type == "semi" else 31, tzinfo=timezone.utc).date(),
         report_type=report_type,
-        published_at=NOW - timedelta(days=30),
+        published_at=_now() - timedelta(days=30),
     )
     session.add(row)
     session.flush()
