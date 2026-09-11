@@ -113,3 +113,53 @@ def test_event_type_to_thesis_mapping_exists_only_in_nl_parsing():
         if "_EVENT_TO_THESIS" in text:
             violations.append(f"{relative_path} 引用了标签映射表")
     assert not violations, violations
+
+
+# --------------------------------------------------------------------------- #
+# 限售股解禁类公告：确定性可识别的假阳性
+# --------------------------------------------------------------------------- #
+def test_lockup_release_is_not_classified_as_restructuring():
+    """★ 抽样实测（15 条真实公告）暴露的假阳性。
+
+    标题带「重大资产重组」但正文讲的是**限售股解禁**：
+        「中信证券……关于河北中瓷电子科技股份有限公司重大资产重组部分
+          限售股份上市流通的核查意见」
+
+    这类公告在每单重组完成后会**连续产生数年**（每批限售股解禁一次），
+    若被判成重组催化，会持续制造幻影机会。
+    """
+    from app.engine import classifier
+
+    negative_cases = [
+        "中信证券股份有限公司关于河北中瓷电子科技股份有限公司重大资产重组部分限售股份上市流通的核查意见",
+        "关于重大资产重组部分限售股份上市流通的提示性公告",
+        "关于重大资产重组限售股解除限售的公告",
+    ]
+    for title in negative_cases:
+        assert not classifier.is_non_restructuring("公司关于增持股份的公告")
+        assert classifier.is_non_restructuring(title), title
+        assert EventType.RESTRUCTURING not in classifier.classify_all(title), title
+        assert classifier.classify_announcement(title) is not EventType.RESTRUCTURING, title
+
+
+def test_genuine_restructuring_announcements_still_pass():
+    """负向规则不得误伤真正的重组公告。"""
+    from app.engine import classifier
+
+    positive_cases = [
+        "关于重大资产重组进展的公告",
+        "关于筹划重大资产重组暨签订《股权投资意向协议》的提示性公告",
+        "关于重大资产重组获得湖南省国资委批复的公告",
+        "关于重大资产重组报告书（草案）的公告",
+        "关于终止重大资产重组的公告",
+    ]
+    for title in positive_cases:
+        assert classifier.classify_announcement(title) is EventType.RESTRUCTURING, title
+
+
+def test_lockup_release_can_still_match_another_type():
+    """若限售股公告同时涉及减持，应归到减持而不是被整体丢弃。"""
+    from app.engine import classifier
+
+    title = "关于重大资产重组限售股上市流通暨股东减持计划的公告"
+    assert classifier.classify_announcement(title) is EventType.SHAREHOLDER_SELL

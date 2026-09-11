@@ -61,6 +61,24 @@ KEYWORD_RULES: tuple[KeywordRule, ...] = (
 )
 
 
+#: 出现这些词时**不得**归类为 RESTRUCTURING —— 它们是确定性可识别的非重组事件。
+#:
+#: 「`关于重大资产重组部分限售股份上市流通的提示性公告`」讲的是**限售股解禁**，
+#: 不是重组。但标题里带「重大资产重组」，关键词白名单会误命中。
+#: 这类公告在每单重组完成后会**连续产生数年**（每批限售股解禁一次），
+#: 若被判成重组催化，会持续制造幻影机会 —— 实测 15 条抽样里有 2 条属于此类。
+#:
+#: 这不是语义判断（不涉及「重组会不会成功」），而是确定性的标题模式识别，
+#: 因此适合放在规则层（规格 §28）。
+RESTRUCTURING_NEGATIVE_KEYWORDS: tuple[str, ...] = (
+    "限售股", "限售股份", "解除限售", "上市流通", "限售期",
+)
+
+
+def _is_non_restructuring(title: str) -> bool:
+    return any(kw in (title or "") for kw in RESTRUCTURING_NEGATIVE_KEYWORDS)
+
+
 def classify_all(title: str, announcement_type: str | None = None) -> tuple[EventType, ...]:
     """返回命中**全部**事件类型，按优先级排序。
 
@@ -73,6 +91,9 @@ def classify_all(title: str, announcement_type: str | None = None) -> tuple[Even
         for rule in sorted(KEYWORD_RULES, key=lambda r: r.priority)
         if any(kw in haystack for kw in rule.keywords)
     ]
+    # 限售股解禁类公告：剔除 RESTRUCTURING（标题里的「重大资产重组」只是历史背景）
+    if _is_non_restructuring(title):
+        hits = [h for h in hits if h is not EventType.RESTRUCTURING]
     return tuple(hits)
 
 
@@ -90,6 +111,11 @@ def passes_prefilter(title: str, announcement_type: str | None = None) -> bool:
     return classify_announcement(title, announcement_type) is not None
 
 
+def is_non_restructuring(title: str) -> bool:
+    """标题是否属于「限售股解禁」这类确定性非重组事件。"""
+    return _is_non_restructuring(title)
+
+
 def matched_keywords(title: str) -> dict[str, tuple[str, ...]]:
     """返回命中的关键词明细（用于可解释性与调试）。"""
     result: dict[str, tuple[str, ...]] = {}
@@ -102,6 +128,8 @@ def matched_keywords(title: str) -> dict[str, tuple[str, ...]]:
 
 __all__ = [
     "KEYWORD_RULES",
+    "RESTRUCTURING_NEGATIVE_KEYWORDS",
+    "is_non_restructuring",
     "KeywordRule",
     "classify_all",
     "classify_announcement",
