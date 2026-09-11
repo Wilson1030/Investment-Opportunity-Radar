@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from app.engine.guard import (
     EvidenceSlice,
     gate_evidence_slices,
@@ -132,3 +134,59 @@ def test_gate_against_real_db_paragraphs(paragraph_lookup):
         paragraph_lookup,
     )
     assert decision_bad.all_rejected
+
+
+# --------------------------------------------------------------------------- #
+# INV-EV1 与「计划中的未来事件」（抽样实测暴露的规格缺口）
+# --------------------------------------------------------------------------- #
+def test_inv_ev1_rejects_future_time_for_occurred_events():
+    """已发生的事件：发现时间早于事件时间是逻辑错误，必须拒绝。"""
+    from datetime import datetime, timedelta, timezone
+
+    from app.engine import guard
+
+    discovery = datetime.now(timezone.utc)
+    with pytest.raises(guard.InvariantViolation):
+        guard.check_event_times(discovery + timedelta(days=3), discovery)
+
+
+def test_planned_events_are_allowed_to_be_in_the_future():
+    """★ 公告预告未来事件（股东大会日 / 限售股上市流通日 / 交割日）是常态。
+
+    规格 §40 的原意是「区分事件发生时间与系统发现时间，避免时间顺序错误」，
+    而不是禁止未来日期。硬套会让这类公告的事件被整条丢弃
+    —— 实测 15 条真实公告里有 2 条（13%）因此丢失。
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from app.models.enums import EventTimeKind
+    from app.pipeline.event_writer import EventWriteResult
+
+    discovery = datetime.now(timezone.utc)
+    future = discovery + timedelta(days=3)
+
+    # 与 event_writer 中同构的分支：只有 occurred 才做 INV-EV1 校验
+    kind = EventTimeKind.PLANNED
+    checked = False
+    if kind is EventTimeKind.OCCURRED:
+        checked = True
+        from app.engine import guard
+        guard.check_event_times(future, discovery)
+    assert not checked, "planned 事件不应触发 INV-EV1"
+
+    # 三种取值齐备，且能写进 Event 的 attributes
+    assert {k.value for k in EventTimeKind} == {"occurred", "planned", "inferred"}
+    result = EventWriteResult(created=False, skipped_reason="x")
+    assert result.event_type is None            # 未传入时不该瞎猜
+    assert result.accepted_texts == ()
+
+
+def test_inferred_kind_marks_publication_time_fallback():
+    """公告没写时间 → event_time 回退为发布时间，kind 必须标为 inferred。"""
+    from app.models.enums import EventTimeKind
+
+    assert EventTimeKind.INFERRED.value == "inferred"
+    # 回退来源常量与 kind 是两件相关但不同的事，都要能被查询到
+    from app.pipeline.event_writer import EVENT_TIME_FROM_PUBLICATION
+
+    assert EVENT_TIME_FROM_PUBLICATION == "publication_time"

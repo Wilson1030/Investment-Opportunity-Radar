@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.models.enums import (
     AssertionKind,
     CertaintyLevel,
+    EventTimeKind,
     EventType,
     ReliabilityLevel,
     ThesisType,
@@ -87,6 +88,8 @@ class ExtractEventOutput(BaseModel):
     summary: str
     #: 未披露时为 None —— **不得猜测**（规格 §40）
     event_time: datetime | None = None
+    #: 「已发生 / 计划中 / 推断」。计划中的未来事件**允许**未来日期。
+    event_time_kind: EventTimeKind = EventTimeKind.OCCURRED
     importance: float = Field(default=0.5, ge=0.0, le=1.0)
     certainty: float = Field(default=0.5, ge=0.0, le=1.0)
     certainty_level: CertaintyLevel = CertaintyLevel.DISCLOSED
@@ -241,6 +244,7 @@ class ScoreSemanticOutput(BaseModel):
 
 
 __all__ = [
+    "EventTimeKind",
     "AnalyzeInput",
     "AnalyzeOutput",
     "AnnouncementInput",

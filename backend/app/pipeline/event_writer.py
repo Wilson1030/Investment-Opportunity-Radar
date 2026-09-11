@@ -17,7 +17,7 @@ from sqlmodel import Session, select
 from app.ai.schemas import ExtractEventOutput
 from app.engine import guard
 from app.facts import EventFact, StrategyFacts
-from app.models.enums import EventType, SourceType
+from app.models.enums import EventTimeKind, EventType, SourceType
 from app.models.evidence import Evidence
 from app.models.events import Event
 from app.models.knowledge import Announcement, Paragraph
@@ -129,22 +129,31 @@ def persist_extraction(
     evidence_level = reliability
 
     # 规则 3：event_time 不得猜测
+    #
+    # ★ INV-EV1 只对 **已发生** 的事件强制：公告预告未来事件（股东大会日、
+    #   限售股上市流通日、交割日）是常态，硬套会把这类公告整条丢掉
+    #   —— 实测 15 条里有 2 条因此丢失。
+    kind = EventTimeKind(getattr(extraction, "event_time_kind", EventTimeKind.OCCURRED))
     event_time = extraction.event_time
     time_source = "disclosed"
     if event_time is None:
         event_time = announcement.publication_time
         time_source = EVENT_TIME_FROM_PUBLICATION
+        kind = EventTimeKind.INFERRED
     if event_time.tzinfo is None:
         event_time = event_time.replace(tzinfo=timezone.utc)
     discovery_time = datetime.now(timezone.utc)
 
     try:
-        guard.check_event_times(event_time, discovery_time)   # INV-EV1
+        if kind is EventTimeKind.OCCURRED:
+            guard.check_event_times(event_time, discovery_time)   # INV-EV1
         guard.check_announcement_evidence(SourceType.ANNOUNCEMENT, announcement_id)  # INV-E3
     except guard.InvariantViolation as exc:
         return EventWriteResult(
             created=False, rejected_slices=rejected, skipped_reason=str(exc),
             accepted_slices=len(decision.accepted),
+            event_type=str(extraction.event_type),
+            title=extraction.title or announcement.title,
         )
 
     source_url = announcement.source_url
@@ -212,6 +221,7 @@ def persist_extraction(
         "counterparty_known": extraction.counterparty_known,
         "not_mentioned": extraction.not_mentioned,
         "event_time_source": time_source,
+        "event_time_kind": kind.value,
         "llm_summary": extraction.summary,
     }
     event = Event(

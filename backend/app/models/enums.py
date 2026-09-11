@@ -92,6 +92,26 @@ class SourceType(StrEnum):
     OTHER = "other"
 
 
+class EventTimeKind(StrEnum):
+    """事件时间与「发生 / 计划 / 推断」的关系。
+
+    ★ 为什么需要它：公告经常**预告未来事件**（股东大会召开日、限售股上市流通日、
+    资产交割日）。若一律要求 ``event_time <= discovery_time``（INV-EV1 的字面理解），
+    这些公告的事件会被整条丢弃 —— 实测 15 条里有 2 条（13%）因此丢失。
+
+    规格 §40 的原意是「区分事件发生时间与系统发现时间，避免时间顺序错误」，
+    而不是禁止未来日期。因此显式区分：
+
+    ``OCCURRED``  已发生（须满足 ``event_time <= discovery_time``）
+    ``PLANNED``   计划中（允许未来日期；时效衰减以**公告发布时间**为准）
+    ``INFERRED``  未披露，由公告发布时间回退推断
+    """
+
+    OCCURRED = "occurred"
+    PLANNED = "planned"
+    INFERRED = "inferred"
+
+
 class CertaintyLevel(StrEnum):
     DISCLOSED = "disclosed"
     PARTIALLY_DISCLOSED = "partially_disclosed"

@@ -139,7 +139,10 @@ cd frontend && npm install && npm run dev
 API    /api/health 返回 ok（26 张表 + 10 类策略注册表自检通过）
 前端   tsc --noEmit 与 vite build 均通过；后端未启动时自动降级为「离线演示数据」
 LLM    真实 Ollama qwen3:4b 抽取：合成样例 1/1 通过；真实公告 2/2 通过（60~70s/条）
-       ⇒ 80 条/日 ≈ 80~90 分钟，可夜间跑完；schema_failure_rate = 0.00
+       ⇒ 80 条/日 ≈ 80~150 分钟，可夜间跑完；schema_failure_rate = 0.00
+抽样   15 条真实公告：证据闸门 15/15 通过、JSON 合规 0.00；
+       规则层与 LLM 一致率仅 27%，但诊断出问题在**规格**（枚举边界未定义、
+       INV-EV1 不允许计划中的未来事件）—— 修复后同批公告一致率 25%→75%
 数据   cninfo 全市场按日查询 420 条 → 关键词预筛 73 条 → PDF 解析 4 份，失败 0 份
        ⇒ 风险 R2（cninfo 反爬 / PDF 质量）实测比预想轻得多
 Pipeline  Pipeline 端到端：420 条公告 → 事件抽取 → 证据闸门 → Thesis → 评分 → 机会卡

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 #: 各节点 prompt 版本。**语义变更时必须递增**，否则旧缓存会被错误复用。
 PROMPT_VERSIONS: dict[str, str] = {
-    "extract_event": "v1",
+    "extract_event": "v2",
     "classify_thesis": "v1",
     "hunt_risk": "v1",
     "analyze": "v1",
@@ -50,7 +50,31 @@ SHAREHOLDER_SELL / BUYBACK / BANKRUPTCY_REORGANIZATION / EARNINGS_TURNAROUND /
 POLICY_CATALYST / MAJOR_CONTRACT / NEW_PRODUCT / MANAGEMENT_CHANGE /
 REGULATORY_RISK / LITIGATION / DIVIDEND_POLICY / OTHER
 
-【关键判据】
+【RESTRUCTURING 与 M&A 的边界 —— 必须严格遵守】
+这两个类型高度重叠，按下面的规则二选一，不要凭感觉：
+- RESTRUCTURING：交易受《上市公司重大资产重组管理办法》约束，或公告出现
+  「重大资产重组」「发行股份购买资产」「资产置换」「借壳」「重组上市」等表述。
+  「重大资产重组进展 / 预案 / 草案 / 报告书 / 获批复 / 获受理」均属此类。
+- M&A：**仅**用于不构成重大资产重组的收购、合并、股权投资意向。
+- 若两者都可能，**选 RESTRUCTURING**。
+判错的后果很实际：下游策略把 RESTRUCTURING 当作「重大资产重组」的核心信号，
+若你判成 M&A，这条公告就不会被识别为重组机会。
+
+【标题与正文冲突时，以正文为准】
+标题常带「重大资产重组」字样，但正文可能只是在说别的事。例如：
+- 「关于重大资产重组部分限售股份上市流通的提示性公告」
+  → 正文讲的是限售股解禁，不是重组事件 → 判 OTHER
+- 「关于重大资产重组进展的公告」→ 正文确实在讲重组推进 → RESTRUCTURING
+若正文确实不构成任何一类事件，就选 OTHER。**宁可判 OTHER，也不要硬套标题里的词。**
+
+【event_time 与 event_time_kind】
+- 公告已经发生的事 → event_time_kind = occurred
+- 公告**预告未来**要做的事（股东大会召开日、限售股上市流通日、资产交割日、
+  审核会议日期等）→ event_time_kind = **planned**，event_time 填那个未来日期。
+  这是允许的：计划中的事件本来就在未来。
+- 公告没写时间 → event_time = null，event_time_kind = inferred
+
+【其他关键判据】
 1. importance（0~1）：事件对公司基本面的潜在影响强度，与来源是否官方**无关**。
 2. certainty（0~1）与 certainty_level：反映「这件事被确认到什么程度」。
    已正式披露用 disclosed；只有媒体报道用 media_reported；市场传闻用 market_rumor。
