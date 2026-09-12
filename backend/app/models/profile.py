@@ -43,6 +43,11 @@ class InvestmentProfile(SQLModel, table=True):
     # 风险承受能力是次要字段，**不作为主要分类依据**（规格 §4.1）
     risk_tolerance: str | None = None
 
+    #: 是否把「早期苗头」纳入关注范围（预重整 / 重整申请 / 法院受理 /
+    #: 筹划停牌 / 意向协议）。用户明确要求「提前布局」时开启；
+    #: 不想看低确定性信号时可以关掉 —— 这直接改变排序结果（§58 原则 6）。
+    accept_early_signals: bool = True
+
     # 反馈闭环（规格 §36）
     auto_learn_enabled: bool = True
     locked_weights: list[ThesisType] = Field(default_factory=list, sa_column=Column(JSON))

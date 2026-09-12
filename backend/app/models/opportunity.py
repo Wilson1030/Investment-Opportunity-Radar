@@ -38,6 +38,13 @@ class Opportunity(SQLModel, table=True):
     # ---------- 状态 ----------
     status: OpportunityStatus = Field(default=OpportunityStatus.DISCOVERED, index=True)
 
+    # ---------- 阶段（规格 §20 的生命周期之外的另一维度）----------
+    #: 催化剂阶段（如「早期｜法院受理 / 指定管理人」）。
+    #: ★ 必须落库并展示：否则用户会把早期苗头当成确定的事（§24 / §38）。
+    catalyst_stage: str = Field(default="", index=True)
+    #: 是否为早期信号（催化强度 ≤ 策略定义的 early_stage_max_score）
+    is_early_signal: bool = Field(default=False, index=True)
+
     # ---------- 分数（D08 双分制）----------
     #: 匹配度：该机会与该用户画像的匹配度（规格 §4.3 / §5.8），可解释、可复算
     match_score: float | None = Field(default=None, index=True)

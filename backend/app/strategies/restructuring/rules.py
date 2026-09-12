@@ -24,19 +24,50 @@ from app.strategies.restructuring import invalidation, questions, thesis
 
 _LEVEL_RANK = "ABCDE"
 
-#: 重组类公告的四个事件类型（C1 的输入）
+#: **C1 的输入**：只认「重大资产重组 / 破产重整」这一受《重组管理办法》约束的类别。
+#: M&A（非重大收购）不进 C1 —— 那属于 ma_integration 策略（P10 第 4 位）。
 _DEAL_EVENTS = (
     EventType.RESTRUCTURING,
     EventType.BANKRUPTCY_REORGANIZATION,
 )
 
-#: 催化剂阶梯（关键词 → 阶段分）。**顺序即优先级**，从高到低。
-_LADDER: tuple[tuple[str, float, tuple[str, ...]], ...] = (
-    ("监管核准 / 实施完成", 95.0, ("核准", "过户完成", "实施完成", "完成过户", "注册生效")),
-    ("股东大会通过", 80.0, ("股东大会决议", "股东大会通过")),
-    ("草案 + 评估", 60.0, ("报告书", "草案", "资产评估")),
-    ("预案披露", 40.0, ("预案",)),
-    ("筹划 / 停牌", 20.0, ("停牌", "筹划")),
+#: **催化剂阶梯的输入**：比 C1 宽 —— 收购意向、协议转让等早期苗头也要能定阶段，
+#: 否则会出现「有 M&A 事件却显示『无重组类事件』」这种自相矛盾的标签。
+_LADDER_EVENTS = (
+    EventType.RESTRUCTURING,
+    EventType.BANKRUPTCY_REORGANIZATION,
+    EventType.M_AND_A,
+    EventType.ASSET_INJECTION,
+    EventType.CONTROL_CHANGE,
+)
+
+#: 催化剂阶梯（关键词 → 阶段分）。
+#:
+#: ★ **早期阶段是刻意保留的**：用户明确要求「还不太确定但有苗头」的也要找，
+#: 以便提前布局（预重整 / 债权人申请 / 法院受理 / 筹划停牌 / 意向协议）。
+#: 低分表示「离价值兑现远、确定性低」，不表示不重要 ——
+#: 因此这类机会必须由 ``early_signal()`` 标出来，卡片上显式提示。
+_LADDER: tuple[tuple[str, float, bool, tuple[str, ...]], ...] = (
+    # (阶段名, 分数, 是否早期, 关键词)
+    # 存量（召回保留，但不冒充新催化）—— 分数低但**不是早期**
+    ("存量｜重组已完成（限售解禁 / 后续手续）", 5.0, False,
+     ("限售股", "限售股份", "解除限售", "上市流通", "限售期", "持续督导")),
+    # ---- 早期苗头：用户明确要求「还不太确定但有苗头的也要找」 ----
+    ("早期｜筹划 / 停牌 / 意向协议", 10.0, True,
+     ("筹划", "停牌", "意向协议", "意向书", "投资意向", "拟筹划")),
+    ("早期｜预重整 / 重整申请", 15.0, True,
+     ("预重整", "重整申请", "申请重整", "破产申请", "债权人申请")),
+    ("早期｜法院受理 / 指定管理人", 28.0, True,
+     ("法院受理", "裁定受理", "受理重整", "指定管理人", "重整程序")),
+    # ---- 进展 ----
+    ("进展｜预案披露", 40.0, False, ("预案",)),
+    ("进展｜草案 + 评估", 60.0, False, ("报告书", "草案", "资产评估", "评估结果")),
+    ("进展｜获批复 / 审核通过", 72.0, False,
+     ("批复", "审核通过", "无条件通过", "审核意见")),
+    ("进展｜股东大会通过", 80.0, False, ("股东大会决议", "股东大会通过")),
+    # ---- 完成 ----
+    ("完成｜监管核准 / 实施完成", 95.0, False,
+     ("核准", "过户完成", "实施完成", "完成过户", "注册生效")),
 )
 
 _TERMINATED = ("终止", "失败", "撤回", "撤销")
@@ -153,10 +184,18 @@ class RestructuringStrategy:
 
     # ---------- 催化剂阶梯 ----------
 
+    def is_early_signal(self, facts: StrategyFacts) -> bool:
+        """当前阶段是否属于「早期苗头」（催化强度 ≤ early_stage_max_score）。
+
+        ★ 必须在卡片上显式标注：用户要的是「提前布局」，
+        但把苗头当确定的事会误导决策（规格 §24 / §38）。
+        """
+        return self.catalyst_strength(facts).early
+
     def catalyst_strength(self, facts: StrategyFacts) -> CatalystStage:
-        events = facts.events_of(*_DEAL_EVENTS)
+        events = facts.events_of(*_LADDER_EVENTS)
         if not events:
-            return CatalystStage("无重组类事件", 0.0, "未发现重组类公告")
+            return CatalystStage("无重组 / 重整类事件", 0.0, "未发现重组、重整或收购类公告")
 
         # 终止 / 失败优先判定（阶梯归零 —— 此时失效检测会接管）
         for event in events:
@@ -164,15 +203,21 @@ class RestructuringStrategy:
                 return CatalystStage("终止 / 失败", 0.0, f"事件标题：{event.title}")
 
         best: CatalystStage | None = None
-        for stage, score, keywords in _LADDER:
+        for stage, score, early, keywords in _LADDER:
             for event in events:
                 if any(kw in event.title for kw in keywords):
-                    candidate = CatalystStage(stage, score, f"依据：{event.title}")
+                    candidate = CatalystStage(stage, score, f"依据：{event.title}", early=early)
                     if best is None or candidate.score > best.score:
                         best = candidate
         if best is not None:
             return best
-        return CatalystStage("重组类公告（阶段未知）", 20.0, "存在重组类公告但未识别到阶段关键词")
+        # 无法识别阶段时按**偏低**处理（20 分，落在早期区间）：
+        # 不能因为「不知道进展」就默认它已经推进得很深。
+        return CatalystStage(
+            "早期｜阶段未知（存在重组 / 重整类公告，未识别到阶段关键词）", 20.0,
+            "保守处理：无法确认进展时不计入后期阶段",
+            early=True,
+        )
 
     # ---------- 失效 / 待确认 / 叙事 ----------
 

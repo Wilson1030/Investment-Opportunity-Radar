@@ -87,6 +87,8 @@ def radar(session: Session = Depends(get_session)) -> dict:
             "name": profile.name,
             "top_weights": top_weights,
             "auto_learn_enabled": profile.auto_learn_enabled,
+            #: 是否把「早期苗头」纳入关注范围（前端 Profile 页要能开关）
+            "accept_early_signals": profile.accept_early_signals,
             "locked_weights": [str(t) for t in profile.locked_weights],
         },
         "today": {

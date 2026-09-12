@@ -180,6 +180,9 @@ def opportunity_card(
             opportunity.divergence is not None and opportunity.divergence > 20
         ),
         "why_in_radar": opportunity.why_in_radar or opportunity.why_now,
+        # ★ 阶段必须出现在卡片上：用户要「提前布局」，但把苗头当确定的事会误导决策
+        "catalyst_stage": opportunity.catalyst_stage,
+        "is_early_signal": opportunity.is_early_signal,
         "summary": opportunity.summary,
         "latest_events": [event_brief(e) for e in (events or [])][:5],
         "ai_judgement": opportunity.summary,

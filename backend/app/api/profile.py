@@ -35,6 +35,9 @@ router = APIRouter(tags=["profile"])
 
 class ProfileUpdate(BaseModel):
     name: str | None = None
+    #: 是否把「早期苗头」（预重整 / 重整申请 / 法院受理 / 筹划停牌 / 意向协议）
+    #: 纳入关注范围。用户要「提前布局」时开启；不想看低确定性信号时关闭。
+    accept_early_signals: bool | None = None
     horizon: str | None = None
     markets: list[str] | None = None
     industry_prefs: list[str] | None = None
@@ -75,6 +78,7 @@ def read_profile(session: Session = Depends(get_session)) -> dict:
         "industry_prefs": profile.industry_prefs,
         "exclusions": profile.exclusions,
         "auto_learn_enabled": profile.auto_learn_enabled,
+        "accept_early_signals": profile.accept_early_signals,
         "locked_weights": [str(t) for t in profile.locked_weights],
         "available_templates": list(STRATEGY_TEMPLATES),
     })
@@ -84,7 +88,7 @@ def read_profile(session: Session = Depends(get_session)) -> dict:
 def update_profile(request: ProfileUpdate, session: Session = Depends(get_session)) -> dict:
     profile = get_or_create_default_profile(session)
     for name in ("name", "horizon", "markets", "industry_prefs", "exclusions",
-                 "auto_learn_enabled", "locked_weights"):
+                 "auto_learn_enabled", "locked_weights", "accept_early_signals"):
         value = getattr(request, name)
         if value is not None:
             setattr(profile, name, value)

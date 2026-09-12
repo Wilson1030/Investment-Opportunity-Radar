@@ -24,18 +24,27 @@ class KeywordRule:
 
 #: 关键词白名单。**顺序即优先级**（priority 字段显式声明）。
 KEYWORD_RULES: tuple[KeywordRule, ...] = (
+    # 破产重整的**完整阶段链**：从债权人申请一直到重整计划批准。
+    # 早期阶段（申请 / 受理）确定性低但提前量大，用户明确要求纳入（提前布局）。
     KeywordRule(EventType.BANKRUPTCY_REORGANIZATION,
-                ("破产重整", "重整计划", "破产清算", "预重整", "重整投资人"), 10),
+                ("破产重整", "重整计划", "破产清算", "预重整", "重整投资人",
+                 "重整申请", "申请重整", "法院受理", "裁定受理", "受理重整",
+                 "指定管理人", "破产申请", "债权人申请", "重整程序"), 10),
     KeywordRule(EventType.RESTRUCTURING,
                 ("重大资产重组", "资产重组", "重组预案", "重组报告书",
-                 "发行股份购买资产", "重组进展", "重组终止", "重组失败"), 20),
+                 "发行股份购买资产", "重组进展", "重组终止", "重组失败",
+                 # 早期苗头：筹划 / 停牌 / 借壳 / 重组上市
+                 "筹划重大事项", "筹划重大资产", "重大事项停牌", "停牌筹划",
+                 "重组上市", "借壳", "拟筹划"), 20),
     KeywordRule(EventType.ASSET_INJECTION,
                 ("资产注入", "注入资产", "资产置换", "置入资产", "置出资产"), 30),
     KeywordRule(EventType.CONTROL_CHANGE,
                 ("控股股东变更", "实际控制人变更", "控制权", "控股股东拟",
                  "协议转让", "要约收购", "表决权委托", "权益变动"), 40),
     KeywordRule(EventType.M_AND_A,
-                ("收购", "并购", "股权收购", "重大资产购买", "吸收合并", "合并"), 50),
+                ("收购", "并购", "股权收购", "重大资产购买", "吸收合并", "合并",
+                 # 早期苗头：只有意向、还没成交易
+                 "意向协议", "意向书", "收购意向", "投资意向"), 50),
     KeywordRule(EventType.BUYBACK, ("回购", "股份回购"), 60),
     KeywordRule(EventType.SHAREHOLDER_BUY, ("增持", "增持计划"), 70),
     KeywordRule(EventType.SHAREHOLDER_SELL, ("减持", "减持计划"), 80),
@@ -61,22 +70,32 @@ KEYWORD_RULES: tuple[KeywordRule, ...] = (
 )
 
 
-#: 出现这些词时**不得**归类为 RESTRUCTURING —— 它们是确定性可识别的非重组事件。
+#: 「重组已完成、只剩后续手续」的标志词 —— 限售股解禁是典型。
 #:
-#: 「`关于重大资产重组部分限售股份上市流通的提示性公告`」讲的是**限售股解禁**，
-#: 不是重组。但标题里带「重大资产重组」，关键词白名单会误命中。
-#: 这类公告在每单重组完成后会**连续产生数年**（每批限售股解禁一次），
-#: 若被判成重组催化，会持续制造幻影机会 —— 实测 15 条抽样里有 2 条属于此类。
+#: ⚠ 曾经的错误处理：把它当成**假阳性直接排除**。
+#: 抽样核对时用户判定「关于重大资产重组部分限售股份上市流通的核查意见」
+#: **仍然是 RESTRUCTURING 事件** —— 召回优先。
 #:
-#: 这不是语义判断（不涉及「重组会不会成功」），而是确定性的标题模式识别，
-#: 因此适合放在规则层（规格 §28）。
-RESTRUCTURING_NEGATIVE_KEYWORDS: tuple[str, ...] = (
+#: 但它的**催化强度应当接近零**：这是存量信息，不是新的重组催化。
+#: 所以现在的做法是保留事件、把它标到阶梯最低的「存量」档，
+#: 而不是把它丢掉（丢掉就再也看不见了）。
+#:
+#: 这是确定性的标题模式识别（不涉及「重组会不会成功」这类语义判断），
+#: 因此放在规则层（规格 §28）。
+POST_DEAL_KEYWORDS: tuple[str, ...] = (
     "限售股", "限售股份", "解除限售", "上市流通", "限售期",
+    "持续督导", "过户完成", "实施完毕",
 )
 
 
+def is_post_deal(title: str) -> bool:
+    """标题是否属于「重组已完成、只剩后续手续」的存量信息。"""
+    return any(kw in (title or "") for kw in POST_DEAL_KEYWORDS)
+
+
 def _is_non_restructuring(title: str) -> bool:
-    return any(kw in (title or "") for kw in RESTRUCTURING_NEGATIVE_KEYWORDS)
+    """保留函数名以兼容旧调用；现在**不再排除**任何公告（召回优先）。"""
+    return False
 
 
 def classify_all(title: str, announcement_type: str | None = None) -> tuple[EventType, ...]:
@@ -112,7 +131,11 @@ def passes_prefilter(title: str, announcement_type: str | None = None) -> bool:
 
 
 def is_non_restructuring(title: str) -> bool:
-    """标题是否属于「限售股解禁」这类确定性非重组事件。"""
+    """标题是否属于确定性非重组事件。
+
+    现在恒为 ``False``：按用户判断改为**召回优先**，
+    存量信息（限售股解禁）通过「阶段」而不是「排除」来处理。
+    """
     return _is_non_restructuring(title)
 
 
@@ -128,8 +151,9 @@ def matched_keywords(title: str) -> dict[str, tuple[str, ...]]:
 
 __all__ = [
     "KEYWORD_RULES",
-    "RESTRUCTURING_NEGATIVE_KEYWORDS",
+    "POST_DEAL_KEYWORDS",
     "is_non_restructuring",
+    "is_post_deal",
     "KeywordRule",
     "classify_all",
     "classify_announcement",

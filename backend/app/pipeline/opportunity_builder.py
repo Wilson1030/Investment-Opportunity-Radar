@@ -84,6 +84,7 @@ def build_opportunities(
 ) -> tuple[OpportunityBuildResult, ...]:
     """为一家公司生成/更新全部符合门槛的机会。"""
     facts = facts_builder.build_strategy_facts(session, company_id)
+    accept_early_signals = _accept_early_signals(session, profile_id)
     results: list[OpportunityBuildResult] = []
 
     for code in implemented_types():
@@ -96,6 +97,17 @@ def build_opportunities(
 
         open_questions = strategy.open_questions(facts)
         facts_with_questions = facts_builder.with_open_question_count(facts, len(open_questions))
+
+        # ★ 早期苗头是否纳入，由画像决定（用户要「提前布局」时开启）
+        if not accept_early_signals and bool(
+            getattr(strategy, "is_early_signal", lambda _f: False)(facts_with_questions)
+        ):
+            stage = strategy.catalyst_strength(facts_with_questions)  # type: ignore[attr-defined]
+            results.append(OpportunityBuildResult(
+                thesis_type=code.value, created=False, coverage=evaluation.coverage,
+                reason=f"当前处于「{stage.stage}」，画像未开启早期信号（accept_early_signals=false）",
+            ))
+            continue
 
         coverage = evaluation.coverage
         if coverage < MIN_COVERAGE:
@@ -124,6 +136,19 @@ def build_opportunities(
         )
 
     return tuple(results)
+
+
+def _accept_early_signals(session: Session, profile_id: int) -> bool:
+    """画像是否把「早期苗头」纳入关注范围（§4 的产品设计：不同用户看不同东西）。
+
+    找不到画像时默认 **True** —— 宁可见到（并标注为早期）也不要静默漏掉。
+    """
+    from app.models.profile import InvestmentProfile
+
+    profile = session.get(InvestmentProfile, profile_id)
+    if profile is None:
+        return True
+    return bool(profile.accept_early_signals)
 
 
 # --------------------------------------------------------------------------- #
@@ -206,6 +231,7 @@ def _build_one(
 
     # ---- Opportunity ----
     stage = strategy.catalyst_strength(facts)  # type: ignore[attr-defined]
+    early = bool(getattr(strategy, "is_early_signal", lambda _f: False)(facts))
     risks = _risk_labels(score)
     watch = (
         ["该逻辑已失效，观察是否重新筹划或出现反向进展"]
@@ -259,6 +285,8 @@ def _build_one(
                 new_status = OpportunityStatus(status_before)
 
     opportunity.status = new_status
+    opportunity.catalyst_stage = stage.stage
+    opportunity.is_early_signal = early
     opportunity.match_score = score.match_score
     opportunity.rule_score = score.rule_score
     opportunity.risk_score = score.risk_score

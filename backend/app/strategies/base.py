@@ -91,6 +91,11 @@ class CatalystStage:
     stage: str
     score: float
     description: str
+    #: 是否属于「早期苗头」（预重整 / 重整申请 / 法院受理 / 筹划停牌 / 意向协议）
+    #:
+    #: ★ 不能用「分数低」来代替这个标志：``存量｜重组已完成``阶段分数也很低（5），
+    #: 但它是**已经完成**的事，不是早期。
+    early: bool = False
 
 
 @runtime_checkable

@@ -383,6 +383,19 @@ def seeded(session):
 
 
 @pytest.fixture()
+def pipeline_outcome(session, engine):
+    """跑一次 mock pipeline（session 只借用建表副作用，pipeline 用同一个测试库）。
+
+    放在 conftest 而不是某个测试文件里：test_pipeline_e2e 与
+    test_early_signals 都要用同一条端到端结果。
+    """
+    from app.pipeline.runner import PipelineOptions, run_pipeline
+
+    del session
+    return run_pipeline(PipelineOptions(source="mock", stage="full", limit=None))
+
+
+@pytest.fixture()
 def paragraph_lookup(session, seeded):
     """证据闸门用的段落查询闭包（读 DB）。"""
 

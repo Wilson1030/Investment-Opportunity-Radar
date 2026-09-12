@@ -89,6 +89,8 @@ class CatalystStageDef:
     stage: str
     score: float
     description: str = ""
+    #: 是否属于「早期苗头」（用户明确要求这类信号也要被找到，以便提前布局）
+    early: bool = False
 
 
 @dataclass(frozen=True)
@@ -108,6 +110,8 @@ class StrategyDef:
     evidence_requirements: dict[str, int] = field(default_factory=dict)
     anti_patterns: tuple[str, ...] = ()
     sort_order: int = 100
+    #: 催化强度 ≤ 此值即视为「早期信号」（需卡片显式标注，M7-02）
+    early_stage_max_score: float = 0.0
 
     # ---------- 自检辅助 ----------
 
@@ -172,6 +176,8 @@ _RESTRUCTURING = StrategyDef(
         EventType.BANKRUPTCY_REORGANIZATION,
         EventType.M_AND_A,
     ),
+    #: 早期信号的阶段上限（催化强度 ≤ 此值即视为「早期待确认」）
+    early_stage_max_score=30,
     invalidating_events=(
         InvalidationDef(EventType.RESTRUCTURING, InvalidationSeverity.TERMINAL,
                         "重组终止 / 重大资产重组失败", _TERMINATE_WORDS),
@@ -187,12 +193,26 @@ _RESTRUCTURING = StrategyDef(
     open_question_templates=(
         "交易标的", "交易价格", "重组方案", "资产评估结果", "监管审核结果", "股东大会决议",
     ),
+    # ★ 阶梯从「存量」一直到「完成」。**早期阶段是刻意保留的**：
+    #   用户明确要求「还不太确定但有苗头」的也要找，以便提前布局。
+    #   注意低分不代表不重要 —— 它表示「离价值兑现还远、确定性低」，
+    #   因此这类机会会排在后面，并且必须在卡片上标注阶段
+    #   （否则用户会把苗头当成确定的事，违反规格 §24 / §38）。
     catalyst_ladder=(
-        CatalystStageDef("筹划 / 停牌", 20, "停牌公告、筹划重大事项"),
-        CatalystStageDef("预案披露", 40, "重组预案、发行股份购买资产预案"),
-        CatalystStageDef("草案 + 评估", 60, "重组报告书草案、资产评估结果"),
-        CatalystStageDef("股东大会通过", 80, "股东大会决议公告"),
-        CatalystStageDef("监管核准 / 实施完成", 95, "证监会核准、资产过户完成"),
+        CatalystStageDef("存量｜重组已完成（限售解禁 / 后续手续）", 5,
+                         "限售股上市流通、持续督导、过户完成 —— 存量信息，不是新催化",
+                         early=False),
+        CatalystStageDef("早期｜筹划 / 停牌 / 意向协议", 10,
+                         "筹划重大事项、停牌筹划、意向协议", early=True),
+        CatalystStageDef("早期｜预重整 / 重整申请", 15,
+                         "预重整、债权人申请重整、破产申请", early=True),
+        CatalystStageDef("早期｜法院受理 / 指定管理人", 28,
+                         "法院裁定受理重整、指定管理人", early=True),
+        CatalystStageDef("进展｜预案披露", 40, "重组预案、发行股份购买资产预案"),
+        CatalystStageDef("进展｜草案 + 评估", 60, "重组报告书草案、资产评估结果"),
+        CatalystStageDef("进展｜获批复 / 审核通过", 72, "国资批复、审核无条件通过"),
+        CatalystStageDef("进展｜股东大会通过", 80, "股东大会决议公告"),
+        CatalystStageDef("完成｜监管核准 / 实施完成", 95, "证监会核准、资产过户完成"),
     ),
     default_weights=_weights(
         thesis_match=0.30,

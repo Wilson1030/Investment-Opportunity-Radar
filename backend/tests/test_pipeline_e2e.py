@@ -26,13 +26,6 @@ from app.models.thesis import Thesis
 from app.pipeline.runner import PipelineOptions, run_pipeline
 
 
-@pytest.fixture()
-def pipeline_outcome(session, engine):
-    """跑一次 mock pipeline（session 先建表，pipeline 用同一个测试库）。"""
-    del session  # 只借用它的建表副作用
-    return run_pipeline(PipelineOptions(source="mock", stage="full", limit=None))
-
-
 # --------------------------------------------------------------------------- #
 # 全链路产出
 # --------------------------------------------------------------------------- #
