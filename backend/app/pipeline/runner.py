@@ -31,6 +31,7 @@ dry-run 反而看不到 AI 链路的质量（这正是风险 R3 最需要数据�
 from __future__ import annotations
 
 import json
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -90,6 +91,14 @@ class PipelineOptions:
     max_input_chars: int | None = None
     #: cninfo 全文检索关键词（空 = 不检索，取全市场）
     searchkey: str = ""
+    #: 抽取阶段的并发度。**默认 1（行为与串行完全一致）**。
+    #:
+    #: ★ 为什么做成可配而不是直接调大：实测 Ollama 默认**串行**处理请求，
+    #: 单纯加线程没有收益。要真正提速需要同时满足其一：
+    #:   · 调大服务端并行度（`OLLAMA_NUM_PARALLEL=4`）—— 单 GPU 上约 1.5~2x
+    #:   · 换云端抽取 —— 10~50x，但公告内容会出本机（成本/隐私取舍，由用户定）
+    #: 把「并发能力」与「用哪个 provider」解耦：能力先备好，provider 随时可换。
+    extract_workers: int = 1
     lookback_days: int | None = None
     profile_template: str | None = profile_seed.DEFAULT_TEMPLATE
 
@@ -532,15 +541,15 @@ def _extract_events(
         )
         print(f"[llm] 抽取层 {provider_name}/{model} @ {base_url}")
 
-    llm_used = 0
+    # ---- 准备待抽取的公告（含段落）----
+    pending: list[tuple[object, list]] = []
     for announcement in announcements:
-        if options.source != SOURCE_MOCK and llm_used >= (options.llm_limit or 10**9):
+        if options.source != SOURCE_MOCK and len(pending) >= (options.llm_limit or 10**9):
             report.add_error(
                 "info",
                 f"已达 --llm-limit {options.llm_limit}，剩余公告本轮不再调用 LLM",
             )
             break
-
         paragraphs = mock_source.paragraph_objects(session, int(announcement.id or 0))
         if not paragraphs:
             report.add_error(
@@ -548,16 +557,35 @@ def _extract_events(
                 document_id=announcement.document_id,
             )
             continue
+        pending.append((announcement, paragraphs))
 
+    # ---- 并发调用 LLM（节点是纯函数），结果按顺序回收 ----
+    # ★ 关键约束：**并发只包住 LLM 调用，落库仍在主线程串行执行** ——
+    #   SQLite 多线程写不安全，缓存 IO 也已在 SqlNodeCache 内串行化。
+    workers = max(1, int(options.extract_workers))
+    if workers > 1 and len(pending) > 1:
+        print(f"[llm] 并发抽取：{workers} 线程 / {len(pending)} 条公告")
+
+    def _call(item):
+        announcement, paragraphs = item
         try:
-            extraction = _extract_one(session, announcement, paragraphs, options, runner)
+            return _extract_one(session, announcement, paragraphs, options, runner)
         except (LlmError, ValueError) as exc:
-            report.add_error("extract_failed", str(exc), document_id=announcement.document_id)
+            return exc
+
+    if workers > 1 and len(pending) > 1:
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            extracted = list(pool.map(_call, pending))
+    else:
+        extracted = [_call(item) for item in pending]
+
+    # ---- 串行落库 ----
+    for (announcement, _paragraphs), extraction in zip(pending, extracted):
+        if isinstance(extraction, Exception):
+            report.add_error(
+                "extract_failed", str(extraction), document_id=announcement.document_id
+            )
             continue
-
-        if options.source != SOURCE_MOCK:
-            llm_used += 1
-
         if extraction is None:
             report.add_error(
                 "extract_failed", "抽取未通过 Schema 校验（已重试）",
@@ -782,6 +810,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="关闭 dry-run，真实写库（需先通过 dry-run 预热，docs/07 §6）")
     parser.add_argument("--limit", type=int, default=None, help="候选公司上限")
     parser.add_argument("--llm-limit", type=int, default=3, help="本轮最多对几条公告调用 LLM")
+    parser.add_argument("--extract-workers", type=int, default=1,
+                        help="抽取并发度（默认 1；需服务端并行度或云端才能提速）")
     parser.add_argument("--lookback-days", type=int, default=None)
     parser.add_argument("--pool", choices=[POOL_MARKET, POOL_COMPANY], default=POOL_MARKET,
                         help="market = event-first via cninfo only (default); "
@@ -808,6 +838,7 @@ def main(argv: list[str] | None = None) -> int:
         market_pages=args.market_pages,
         max_input_chars=args.max_chars,
         searchkey=args.searchkey,
+        extract_workers=args.extract_workers,
     ))
 
     payload = outcome.to_dict()

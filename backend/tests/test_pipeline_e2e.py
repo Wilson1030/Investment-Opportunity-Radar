@@ -510,3 +510,62 @@ def test_quality_metrics_expose_r3_verdict(pipeline_outcome):
     assert quality.llm_schema_failure_rate == pytest.approx(0.0)
     assert "本地模型" in quality.extractor_verdict
     assert quality.hallucination_signal is None      # 无证据被拒
+
+
+# --------------------------------------------------------------------------- #
+# 并发抽取：与串行必须**结果完全一致**
+# --------------------------------------------------------------------------- #
+@pytest.fixture()
+def parallel_outcome(session, engine):
+    """同一场景，但抽取阶段用 2 个线程。"""
+    from app.pipeline.runner import PipelineOptions, run_pipeline
+
+    del session
+    return run_pipeline(PipelineOptions(
+        source="mock", stage="full", limit=None, extract_workers=2
+    ))
+
+
+def test_parallel_extraction_matches_serial_numbers(parallel_outcome, engine):
+    """★ 并发抽取必须与串行**逐项一致**。
+
+    设计约束：**并发只包住 LLM 调用，落库仍在主线程串行执行** ——
+    SQLite 多线程写不安全，缓存 IO 也已在 ``SqlNodeCache`` 内串行化。
+
+    这里复用 ``test_pipeline_e2e`` 里已经锁定的规范数值（那些是在串行下产生的）：
+    若并发改变了任何一项，说明有线程安全问题或顺序依赖。
+    """
+    report = parallel_outcome.report
+    assert report.funnel.cards == 3
+    assert report.funnel.events_extracted == 8
+
+    with Session(engine) as s:
+        assert len(s.exec(select(Event)).all()) == 8
+        assert len(s.exec(select(Evidence)).all()) == 21
+        assert len(s.exec(select(ScoreItem)).all()) == 52
+
+        # 顺序也必须是确定的（按 id 升序对应于固定公告顺序）
+        scores = [
+            (round(o.rule_score or 0, 4), o.match_score, o.catalyst_stage, o.is_early_signal)
+            for o in s.exec(select(Opportunity).order_by(Opportunity.id)).all()
+        ]
+    assert scores == [
+        (56.5625, 69.0, "进展｜草案 + 评估", False),
+        (37.2, 49.0, "早期｜法院受理 / 指定管理人", True),
+        (21.05, 42.0, "终止 / 失败", False),
+    ], scores
+
+
+def test_sql_node_cache_is_thread_safe():
+    """缓存读写必须串行化 —— 否则并发抽取会同时改同一个 Session。"""
+    from app.ai.cache import SqlNodeCache
+
+    assert hasattr(SqlNodeCache, "_io_lock"), "SqlNodeCache 必须内置 IO 锁"
+    assert SqlNodeCache._io_lock is SqlNodeCache._io_lock, "必须是类级共享锁"
+
+
+def test_extract_workers_defaults_to_one():
+    """默认 1 线程 —— 行为必须与改动前完全一致（不能悄悄改变默认语义）。"""
+    from app.pipeline.runner import PipelineOptions
+
+    assert PipelineOptions().extract_workers == 1
