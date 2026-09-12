@@ -91,6 +91,8 @@ class PipelineOptions:
     max_input_chars: int | None = None
     #: cninfo 全文检索关键词（空 = 不检索，取全市场）
     searchkey: str = ""
+    #: 截断时最多保留多少段落（None = 用 settings 默认 14）
+    max_input_paragraphs: int | None = None
     #: 抽取阶段的并发度。**默认 1（行为与串行完全一致）**。
     #:
     #: ★ 为什么做成可配而不是直接调大：实测 Ollama 默认**串行**处理请求，
@@ -157,6 +159,8 @@ def run_pipeline(options: PipelineOptions | None = None) -> PipelineOutcome:
     options.lookback_days = options.lookback_days or settings.ingest_lookback_days
     if options.max_input_chars:
         settings.llm_max_input_chars = options.max_input_chars
+    if options.max_input_paragraphs:
+        settings.llm_max_paragraphs = options.max_input_paragraphs
     write = not effective_dry_run(options)
     if options.source == SOURCE_MOCK and options.dry_run:
         print(
@@ -538,6 +542,7 @@ def _extract_events(
             model=model,
             max_attempts=settings.llm_max_attempts,
             timeout_seconds=settings.llm_timeout_seconds,
+            max_output_tokens=settings.llm_max_output_tokens,
         )
         print(f"[llm] 抽取层 {provider_name}/{model} @ {base_url}")
 

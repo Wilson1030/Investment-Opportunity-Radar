@@ -93,6 +93,8 @@ class NodeRunner:
     max_attempts: int = 3
     timeout_seconds: float = 300.0
     ban_word_retries: int = 2
+    #: 单次生成的最大输出 token 数（防重复生成循环，见 provider.LlmRequest）
+    max_output_tokens: int = 900
     #: 执行日志（供 pipeline 汇总与测试断言）
     log: list[NodeRunResult] = field(default_factory=list)
 
@@ -121,6 +123,7 @@ class NodeRunner:
             system=system,
             temperature=self.temperature,
             expect_json=True,
+            max_output_tokens=self.max_output_tokens,
             timeout_seconds=self.timeout_seconds,
         )
 
@@ -155,6 +158,7 @@ class NodeRunner:
                         system=system,
                         temperature=self.temperature,
                         expect_json=True,
+            max_output_tokens=self.max_output_tokens,
                         timeout_seconds=self.timeout_seconds,
                     )
                     continue
@@ -176,6 +180,7 @@ class NodeRunner:
                     system=system,
                     temperature=self.temperature,
                     expect_json=True,
+            max_output_tokens=self.max_output_tokens,
                     timeout_seconds=self.timeout_seconds,
                 )
                 continue

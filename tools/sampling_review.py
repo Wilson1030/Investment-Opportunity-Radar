@@ -164,6 +164,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--lookback-days", type=int, default=90)
     parser.add_argument("--market-pages", type=int, default=20)
     parser.add_argument("--model", default="", help="模型名（仅用于记录到核对表）")
+    parser.add_argument("--max-paragraphs", type=int, default=None,
+                        help="截断时最多保留多少段落（默认 14）")
+    parser.add_argument("--max-chars", type=int, default=None,
+                        help="单条公告送入 LLM 的最大字符数（默认 6000）")
     args = parser.parse_args(argv)
 
     from app.config import settings
@@ -189,6 +193,8 @@ def main(argv: list[str] | None = None) -> int:
         market_pages=args.market_pages,
         limit=args.n,
         llm_limit=args.n,
+        max_input_chars=args.max_chars,
+        max_input_paragraphs=args.max_paragraphs,
     ))
     elapsed = time.time() - started
 

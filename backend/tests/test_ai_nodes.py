@@ -403,3 +403,109 @@ def test_sql_cache_opens_its_own_session(engine):
     with Session(engine) as s:
         from_session = SqlNodeCache(s)
     assert from_session.engine is not None
+
+
+# --------------------------------------------------------------------------- #
+# 输出长度上限（★ 防「重复生成循环」的安全阀）
+# --------------------------------------------------------------------------- #
+def test_llm_request_has_output_token_cap():
+    """★ Ollama 默认**不限制输出长度**：模型一旦进入重复生成循环，
+    就会一直输出到上下文上限 —— 实测有一次单条跑了 **21 分钟仍未结束**，
+    而且此时 `/api/ps` 会报告「模型未加载」，极难排查。
+
+    这解释了为什么单条延迟在 73s ~ 450s+ 之间剧烈波动。
+    """
+    from app.ai.provider import LlmRequest
+    from app.config import settings
+
+    request = LlmRequest(prompt="x")
+    assert request.max_output_tokens > 0, "必须有输出上限，否则可能跑飞"
+    assert request.max_output_tokens == settings.llm_max_output_tokens
+    # 抽取的正常输出约 400 token —— 上限要有余量但能兜住跑飞
+    assert 400 < request.max_output_tokens <= 2000
+
+
+def test_ollama_payload_carries_num_predict():
+    """上限必须真的传进请求体，否则等于没设。"""
+    import httpx
+
+    from app.ai.provider import LlmRequest, OllamaProvider
+
+    captured: dict = {}
+
+    class _FakeResponse:
+        status_code = 200
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return {"message": {"content": "{}"}, "prompt_eval_count": 1, "eval_count": 1}
+
+    class _FakeClient:
+        def __init__(self, *args, **kwargs) -> None: ...
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc) -> None:
+            return None
+
+        def post(self, url, json=None):
+            captured["url"] = url
+            captured["json"] = json
+            return _FakeResponse()
+
+    original = httpx.Client
+    httpx.Client = _FakeClient  # type: ignore[misc]
+    try:
+        OllamaProvider(base_url="http://x").complete(
+            "qwen3:4b", LlmRequest(prompt="p", max_output_tokens=777)
+        )
+    finally:
+        httpx.Client = original  # type: ignore[misc]
+
+    assert captured["json"]["options"]["num_predict"] == 777
+    assert captured["json"]["options"]["temperature"] == 0.0
+    assert captured["json"]["format"] == "json"
+
+
+def test_openai_payload_carries_max_tokens():
+    import httpx
+
+    from app.ai.provider import LlmRequest, OpenAiCompatProvider
+
+    captured: dict = {}
+
+    class _FakeResponse:
+        status_code = 200
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return {"choices": [{"message": {"content": "{}"}}], "usage": {}}
+
+    class _FakeClient:
+        def __init__(self, *args, **kwargs) -> None: ...
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc) -> None:
+            return None
+
+        def post(self, url, json=None, headers=None):
+            captured["json"] = json
+            return _FakeResponse()
+
+    original = httpx.Client
+    httpx.Client = _FakeClient  # type: ignore[misc]
+    try:
+        OpenAiCompatProvider(base_url="http://x", api_key="k").complete(
+            "m", LlmRequest(prompt="p", max_output_tokens=555)
+        )
+    finally:
+        httpx.Client = original  # type: ignore[misc]
+
+    assert captured["json"]["max_tokens"] == 555

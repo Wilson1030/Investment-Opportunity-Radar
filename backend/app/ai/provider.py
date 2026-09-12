@@ -29,6 +29,9 @@ class LlmRequest:
     temperature: float = 0.0
     expect_json: bool = True
     timeout_seconds: float = 300.0
+    #: 最大输出 token 数。**必须设置** —— 否则模型进入重复生成循环时
+    #: 会一直输出到上下文上限，单条可跑几十分钟（实测 21 分钟未结束）。
+    max_output_tokens: int = 900
 
 
 @dataclass(frozen=True)
@@ -70,7 +73,11 @@ class OllamaProvider:
             "model": model,
             "messages": messages,
             "stream": False,
-            "options": {"temperature": request.temperature},
+            "options": {
+                "temperature": request.temperature,
+                # ★ 必须有上限：否则重复生成循环会让单条请求跑几十分钟
+                "num_predict": request.max_output_tokens,
+            },
         }
         if request.expect_json:
             payload["format"] = "json"
@@ -115,6 +122,7 @@ class OpenAiCompatProvider:
             "model": model,
             "messages": messages,
             "temperature": request.temperature,
+            "max_tokens": request.max_output_tokens,
         }
         if request.expect_json:
             payload["response_format"] = {"type": "json_object"}
