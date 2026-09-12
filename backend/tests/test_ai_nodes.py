@@ -308,3 +308,98 @@ def test_semantic_node_layer_is_analyze():
     assert SCORE_SEMANTIC.layer == "analyze"
     assert CLASSIFY_THESIS.layer == "extract"
     assert SCORE_SEMANTIC.Input.model_fields["thesis_type"].annotation is ThesisType
+
+
+# --------------------------------------------------------------------------- #
+# 并发 + 缓存（★ 教训：用 mock 源验证并发是**无效的**，它根本不走缓存）
+# --------------------------------------------------------------------------- #
+def test_sql_cache_is_safe_under_concurrent_extraction(engine):
+    """★ 并发抽取必须能安全走缓存。
+
+    **为什么这条测试必须用真实缓存而不是 mock 源**：
+    mock 源的 ``synthesize_extraction()`` 是纯规则合成，**不碰 runner 与缓存** ——
+    所以「workers=2 与 workers=1 结果一致」这个观察**完全没有覆盖并发路径**。
+    真实跑立刻炸了：
+
+        sqlalchemy.exc.InvalidRequestError:
+        This session is in 'prepared' state; no further SQL can be emitted
+
+    根因：SQLAlchemy ``Session`` 不是线程安全的。修法是让 ``SqlNodeCache``
+    每次调用开一个短生命周期 Session（见该类 docstring）。
+    """
+    import json as _json
+    from concurrent.futures import ThreadPoolExecutor
+    from datetime import datetime, timezone
+
+    from sqlmodel import Session as _Session
+    from sqlmodel import select as _select
+
+    from app.ai.cache import SqlNodeCache
+    from app.ai.provider import ScriptedProvider
+    from app.ai.runner import NodeRunner
+    from app.ai.schemas import (
+        AnnouncementInput,
+        CompanyInput,
+        ExtractEventInput,
+        ParagraphInput,
+    )
+    from app.models.audit import LlmNodeRun
+
+    payload = {
+        "event_type": "BANKRUPTCY_REORGANIZATION", "title": "t", "summary": "s",
+        "importance": 0.8, "certainty": 0.8, "certainty_level": "disclosed",
+        "evidence_slices": [
+            {"page": 1, "para_index": 1, "relevant_text": "公司收到法院裁定受理重整申请"}
+        ],
+        "extracted_facts": [], "affected_thesis": [], "not_mentioned": [],
+    }
+    scripted = _json.dumps(payload, ensure_ascii=False)
+
+    def build(index: int) -> ExtractEventInput:
+        return ExtractEventInput(
+            company=CompanyInput(name=f"C{index}", code=f"6000{index:02d}", is_st=True),
+            announcement=AnnouncementInput(
+                document_id=f"DOC-{index}", title=f"关于重整的公告 {index}",
+                publication_time=datetime.now(timezone.utc),
+            ),
+            paragraphs=[ParagraphInput(page=1, para_index=1,
+                                       text="公司收到法院裁定受理重整申请" * 3)],
+        )
+
+    inputs = [build(i) for i in range(6)]
+    provider = ScriptedProvider(default=scripted)
+    runner = NodeRunner(provider=provider, cache=SqlNodeCache(engine), model="qwen3:4b")
+
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        results = list(pool.map(lambda item: runner.run(EXTRACT_EVENT, item), inputs))
+
+    assert all(r.ok for r in results), [r.error for r in results if not r.ok]
+
+    # 每线程的写入不得互相覆盖
+    with _Session(engine) as s:
+        rows = s.exec(_select(LlmNodeRun)).all()
+    assert len(rows) == len(inputs), f"缓存行数 {len(rows)} ≠ {len(inputs)}"
+
+    # 再跑一遍必须全部命中缓存（0 次新调用）
+    provider2 = ScriptedProvider(default=scripted)
+    runner2 = NodeRunner(provider=provider2, cache=SqlNodeCache(engine), model="qwen3:4b")
+    for item in inputs:
+        assert runner2.run(EXTRACT_EVENT, item).status is NodeRunStatus.CACHED
+    assert provider2.calls == []
+
+
+def test_sql_cache_opens_its_own_session(engine):
+    """缓存不得长期持有 Session —— 那正是并发下炸掉的原因。"""
+    from app.ai.cache import SqlNodeCache
+
+    cache = SqlNodeCache(engine)
+    assert not hasattr(cache, "session"), "不应持有长生命周期 Session"
+    assert cache.engine is not None
+    assert hasattr(SqlNodeCache, "_io_lock")
+
+    # 也支持传 Session（取它的 bind），保持旧调用方式可用
+    from sqlmodel import Session
+
+    with Session(engine) as s:
+        from_session = SqlNodeCache(s)
+    assert from_session.engine is not None

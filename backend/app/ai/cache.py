@@ -121,8 +121,19 @@ class SqlNodeCache:
     #: 类级锁：同一进程内所有缓存实例共享（Session 本身也不是线程安全的）
     _io_lock = threading.Lock()
 
-    def __init__(self, session: Session) -> None:
-        self.session = session
+    def __init__(self, session_or_engine) -> None:
+        """可传 Session 或 Engine。
+
+        ★ **每次调用开自己的 Session**，而不是长期持有一个 ——
+        SQLAlchemy 的 ``Session`` **不是线程安全的**。踩过的坑：
+        并发抽取时 worker 线程用主线程创建的 Session 提交，直接抛
+        ``InvalidRequestError: This session is in 'prepared' state``。
+        缓存表是独立的一张表，短生命周期 Session 的开销可以忽略。
+        """
+        if isinstance(session_or_engine, Session):
+            self.engine = session_or_engine.get_bind()
+        else:
+            self.engine = session_or_engine
 
     def get(self, node_name: str, input_hash: str, prompt_version: str) -> CacheEntry | None:
         with self._io_lock:
@@ -131,7 +142,14 @@ class SqlNodeCache:
     def _get_locked(
         self, node_name: str, input_hash: str, prompt_version: str
     ) -> CacheEntry | None:
-        row = self.session.exec(
+        # 每次调用独立 Session（线程安全），并按主键查询避免依赖 long-lived identity map
+        with Session(self.engine) as session:
+            return self._get_with(session, node_name, input_hash, prompt_version)
+
+    def _get_with(
+        self, session: Session, node_name: str, input_hash: str, prompt_version: str
+    ) -> CacheEntry | None:
+        row = session.exec(
             select(LlmNodeRun).where(
                 LlmNodeRun.node_name == node_name,
                 LlmNodeRun.input_hash == input_hash,
@@ -165,10 +183,19 @@ class SqlNodeCache:
             )
 
     def _put_locked(self, **kwargs) -> int:
+        """加锁并开一个**短生命周期 Session** 后写入。
+
+        ★ 每次调用独立 Session：SQLAlchemy ``Session`` 不是线程安全的。
+        踩过的坑：并发抽取时 worker 线程用主线程创建的 Session 提交，
+        直接抛 ``InvalidRequestError: This session is in 'prepared' state``。
+        """
+        with Session(self.engine) as session:
+            return self._put_with(session, **kwargs)
+
+    def _put_with(self, session: Session, **kwargs) -> int:
         node_name = kwargs["node_name"]
         input_hash = kwargs["input_hash"]
         prompt_version = kwargs["prompt_version"]
-        # 从 kwargs 取出全部字段（保持下面的函数体不变）
         provider = kwargs["provider"]
         model = kwargs["model"]
         layer = kwargs["layer"]
@@ -180,9 +207,10 @@ class SqlNodeCache:
         latency_ms = kwargs["latency_ms"]
         prompt_tokens = kwargs["prompt_tokens"]
         completion_tokens = kwargs["completion_tokens"]
-        existing = self._get_locked(node_name, input_hash, prompt_version)
+
+        existing = self._get_with(session, node_name, input_hash, prompt_version)
         if existing is not None and existing.id is not None:
-            row = self.session.get(LlmNodeRun, existing.id)
+            row = session.get(LlmNodeRun, existing.id)
             assert row is not None
             row.status = status
             row.attempt = attempt
@@ -210,9 +238,9 @@ class SqlNodeCache:
                 completion_tokens=completion_tokens,
                 created_at=datetime.now(timezone.utc),
             )
-            self.session.add(row)
-        self.session.commit()
-        self.session.refresh(row)
+            session.add(row)
+        session.commit()
+        session.refresh(row)
         return int(row.id or 0)
 
 
