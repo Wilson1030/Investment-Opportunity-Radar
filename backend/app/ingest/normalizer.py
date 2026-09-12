@@ -31,10 +31,34 @@ class UpsertOutcome:
     skipped_reason: str | None = None
 
 
+#: 从公司名识别风险警示状态 —— cninfo 的 secName 就是「*ST西发」「ST龙元」这种形态，
+#: 信息已经在手里，不需要另找 ST 名单（实测 akshare 的东方财富接口在本环境不可达）。
+_ST_NAME_MARKERS = ("*ST", "ST", "退市", "风险警示")  # 顺序无关，逐一判定
+
+
+def infer_is_st(name: str) -> bool:
+    """从公司名推断是否处于风险警示状态。
+
+    ★ 为什么不能省：C4「经营困境背景」依赖 is_st，
+    而真实链路拿不到 ST 名单时它恒为 False ——
+    结果一堆名字里明明写着「*ST」的公司，coverage 全部相同、卡片毫无区分度。
+
+    注意：ST 是 *ST 的子串，但两者都算风险警示，无需区分。
+    """
+    if not name:
+        return False
+    head = name.strip()[:4].upper()
+    return any(marker.upper() in head for marker in _ST_NAME_MARKERS)
+
+
 def upsert_company(
-    session: Session, code: str, name: str = "", *, is_st: bool = False,
+    session: Session, code: str, name: str = "", *, is_st: bool | None = None,
     commit: bool = True, exchange: str | None = None,
 ) -> Company:
+    # 未显式指定时，从公司名推断（cninfo 的 secName 自带 ST 前缀）
+    if is_st is None:
+        is_st = infer_is_st(name)
+
     stock = session.exec(select(Stock).where(Stock.code == code)).first()
     if stock is not None:
         company = session.get(Company, stock.company_id)
@@ -54,7 +78,7 @@ def upsert_company(
                     session.commit()
             return company
 
-    company = Company(name=name or code, is_st=is_st, is_risk_warning=is_st)
+    company = Company(name=name or code, is_st=bool(is_st), is_risk_warning=bool(is_st))
     session.add(company)
     session.flush()
     session.add(Stock(company_id=int(company.id or 0), code=code,

@@ -22,7 +22,19 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 BACKEND = ROOT / "backend"
-DB = BACKEND / "data" / "radar.db"
+
+#: ★ 数据库文件必须**问应用**（app.db.DATABASE_URL），不能自己拼路径。
+#: 踩过的坑：这里曾经硬编码 BACKEND / "data" / "radar.db"，
+#: 而应用解析出来的是 PROJECT_ROOT / "data" / "radar.db" ——
+#: 于是「清库」清的是另一个文件，真正的库里旧数据还在，
+#: 表现为「重置之后 mock 数据还在」，极难排查。
+sys.path.insert(0, str(BACKEND))
+from app.db import DATABASE_URL  # noqa: E402
+
+if not DATABASE_URL.startswith("sqlite"):
+    raise SystemExit("本工具只用于重置本地 SQLite 库")
+
+DB = Path(DATABASE_URL.split("sqlite:///", 1)[-1])
 SIDECARS = [Path(str(DB) + s) for s in ("-wal", "-shm", "-journal")]
 
 

@@ -183,3 +183,34 @@ def test_repeated_batch_keeps_row_count_stable(session):
     assert int(first_count) == int(second_count) == 3
     paragraphs = session.exec(select(func.count()).select_from(Paragraph)).one()
     assert int(paragraphs) == 6
+
+
+# --------------------------------------------------------------------------- #
+# 从公司名推断 ST 状态（cninfo 的 secName 自带前缀）
+# --------------------------------------------------------------------------- #
+def test_infer_is_st_from_company_name():
+    """★ 真实链路拿不到 ST 名单时，is_st 恒为 False ——
+    结果名字里明明写着「*ST」的公司 coverage 全部相同、卡片毫无区分度。
+    cninfo 的 secName 就是「*ST西发」这种形态，信息本来就在手里。
+    """
+    from app.ingest.normalizer import infer_is_st
+
+    for name in ["*ST西发", "ST龙元", "ST东时", "*ST沐邦", "ST加加", "ST新元"]:
+        assert infer_is_st(name) is True, name
+    for name in ["南网能源", "天桥起重", "西藏发展", ""]:
+        assert infer_is_st(name) is False, name
+
+
+def test_upsert_company_infers_st_when_not_specified(session):
+    from app.ingest.normalizer import upsert_company
+
+    company = upsert_company(session, "600001", "*ST测试")
+    assert company.is_st is True
+    assert company.is_risk_warning is True
+
+    normal = upsert_company(session, "600002", "正常公司")
+    assert normal.is_st is False
+
+    # 显式指定时以参数为准（不猜）
+    forced = upsert_company(session, "600003", "*ST仍按参数", is_st=False)
+    assert forced.is_st is False
