@@ -319,10 +319,27 @@ def test_event_times_respect_inv01(pipeline_outcome, engine):
 
 
 def test_events_marked_invalidating_are_the_termination_ones(pipeline_outcome, engine):
+    """被标为失效的事件必须真的能否定某个策略的前提。
+
+    注意：早期苗头（重整申请 / 法院受理）**不是**失效事件 ——
+    它们只是确定性低，不代表逻辑已经被否定。
+    """
     with Session(engine) as s:
         invalidating = s.exec(select(Event).where(Event.is_invalidating == True)).all()  # noqa: E712
-    assert invalidating
-    assert all("终止" in e.title or "失败" in e.title for e in invalidating)
+    assert invalidating, "mock 场景里有一单重组终止，必须被标为失效"
+    for event in invalidating:
+        assert any(kw in event.title for kw in ("终止", "失败", "撤回", "不予受理", "驳回", "宣告")), (
+            f"被标为失效的事件标题看不出否定含义：{event.title}"
+        )
+    # 早期苗头不得被误标为失效
+    early_titles = [
+        "关于债权人申请对公司进行重整的公告",
+        "关于法院裁定受理公司重整申请的公告",
+    ]
+    for title in early_titles:
+        assert not any(event.title == title for event in invalidating), (
+            f"早期苗头被误标为失效：{title}"
+        )
 
 
 # --------------------------------------------------------------------------- #

@@ -70,7 +70,8 @@ _LADDER: tuple[tuple[str, float, bool, tuple[str, ...]], ...] = (
      ("核准", "过户完成", "实施完成", "完成过户", "注册生效")),
 )
 
-_TERMINATED = ("终止", "失败", "撤回", "撤销")
+# 注意：这里**不再**维护失效关键词表。催化强度归零的唯一依据是
+# invalidation.detect()（registry 里的失效规则），避免两份关键词漂移。
 
 _CONDITIONS = get_def(ThesisType.RESTRUCTURING).core_conditions
 _DEAL_C1, _DEAL_C2, _DEAL_C3, _DEAL_C4 = (
@@ -197,10 +198,19 @@ class RestructuringStrategy:
         if not events:
             return CatalystStage("无重组 / 重整类事件", 0.0, "未发现重组、重整或收购类公告")
 
-        # 终止 / 失败优先判定（阶梯归零 —— 此时失效检测会接管）
-        for event in events:
-            if any(kw in event.title for kw in _TERMINATED):
-                return CatalystStage("终止 / 失败", 0.0, f"事件标题：{event.title}")
+        # ★ 终止 / 失败优先判定：**直接问失效引擎**，不再维护第二份关键词表。
+        #
+        # 踩过的坑：原来这里有一份独立的 _TERMINATED 关键词，与 registry 的
+        # 失效规则各写一份，结果「法院不予受理重整申请」被判为失效（应该终止）
+        # 却仍然拿着 15 分的催化强度 —— 两张表漂移了。
+        # 现在只认一个权威来源：invalidation.detect()。
+        hits = invalidation.detect(facts)
+        if invalidation.should_invalidate(hits):
+            return CatalystStage(
+                "终止 / 失败", 0.0,
+                f"命中失效条件：{hits[0].rule_description}",
+                early=False,
+            )
 
         best: CatalystStage | None = None
         for stage, score, early, keywords in _LADDER:

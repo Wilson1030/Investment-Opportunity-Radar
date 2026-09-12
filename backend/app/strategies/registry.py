@@ -50,13 +50,34 @@ class CoreConditionDef:
 
 @dataclass(frozen=True)
 class InvalidationDef:
-    """失效条件（规格 §23 / M5-03）。``title_contains`` 为空表示只看事件类型。"""
+    """失效条件（规格 §23 / M5-03）。``title_contains`` 为空表示只看事件类型。
+
+    ``early_only``：只对**尚无进展证据**的机会生效。
+
+    ★ 为什么需要它：处于早期待确认阶段时收到监管问询 / 关注函往往是终止的前兆，
+    值得提醒；但对已经披露预案 / 草案的机会，收到问询函是常规流程，报警就是噪声。
+    判定「进展证据」= 标题含 预案 / 报告书 / 草案 / 批复 / 股东大会 / 核准。
+    """
 
     event_type: EventType
     severity: InvalidationSeverity
     description: str
     title_contains: tuple[str, ...] = ()
     amount_ratio_gt: float | None = None
+    early_only: bool = False
+    #: **AND 语义**：标题必须同时包含全部关键词。
+    #:
+    #: ★ 为什么需要：中文标题常在关键词中间插入别的词 ——
+    #: 「关于法院宣告**公司**破产的公告」既不包含「宣告破产」也不包含「破产宣告」，
+    #: 用 OR 要么漏（写成完整短语）要么误伤（写成裸词「破产」会命中健康的破产重整）。
+    #: AND 语义正好解决这类问题。
+    title_all_of: tuple[str, ...] = ()
+    #: **排除词**：标题出现其中任意一个就**不**算命中。
+    #:
+    #: ★ 为什么需要：``title_all_of=("宣告","破产")`` 会把
+    #: 「法院宣告破产重整计划**执行完毕**的公告」也判成失效 ——
+    #: 而那是重整**成功**。纯关键词匹配必须配排除词才安全。
+    title_none_of: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -179,6 +200,7 @@ _RESTRUCTURING = StrategyDef(
     #: 早期信号的阶段上限（催化强度 ≤ 此值即视为「早期待确认」）
     early_stage_max_score=30,
     invalidating_events=(
+        # ---- 重组类 ----
         InvalidationDef(EventType.RESTRUCTURING, InvalidationSeverity.TERMINAL,
                         "重组终止 / 重大资产重组失败", _TERMINATE_WORDS),
         InvalidationDef(EventType.CONTROL_CHANGE, InvalidationSeverity.SEVERE,
@@ -189,6 +211,42 @@ _RESTRUCTURING = StrategyDef(
                         "核心资产退出", ("退出", "放弃", "不再纳入")),
         InvalidationDef(EventType.LITIGATION, InvalidationSeverity.SEVERE,
                         "重大诉讼致交易基础受损", amount_ratio_gt=0.3),
+        # ---- 破产重整类 ★ 早期苗头的主要死法 ----
+        # 之前完全没有覆盖这类事件，导致「死掉的苗头永远挂着」。
+        InvalidationDef(EventType.BANKRUPTCY_REORGANIZATION, InvalidationSeverity.TERMINAL,
+                        "法院不予受理 / 驳回重整申请",
+                        ("不予受理", "驳回", "不予立案", "不予批准受理")),
+        InvalidationDef(EventType.BANKRUPTCY_REORGANIZATION, InvalidationSeverity.TERMINAL,
+                        "重整申请被撤回 / 撤销",
+                        ("撤回申请", "撤回重整", "撤销申请", "撤回")),
+        InvalidationDef(EventType.BANKRUPTCY_REORGANIZATION, InvalidationSeverity.TERMINAL,
+                        "终止重整程序 / 转入破产清算",
+                        ("终止重整", "终止破产重整", "终止重整程序",
+                         "破产清算", "重整失败")),
+        # ★ 单独一条：中文标题会在关键词中间插字（「宣告公司破产」），
+        #   所以这条用 AND 语义。不能和上面的 OR 关键词混在同一条规则里 ——
+        #   title_all_of 与 title_contains 是「与」关系，混用会互相收窄。
+        InvalidationDef(EventType.BANKRUPTCY_REORGANIZATION, InvalidationSeverity.TERMINAL,
+                        "法院宣告破产",
+                        title_all_of=("宣告", "破产"),
+                        # 注意排除：宣告「破产重整计划执行完毕」是重整**成功**
+                        title_none_of=("执行完毕", "执行完成", "重整计划", "批准", "受理")),
+        InvalidationDef(EventType.BANKRUPTCY_REORGANIZATION, InvalidationSeverity.SEVERE,
+                        "重整计划未获通过 / 未获批准",
+                        ("未获通过", "未通过", "未获批准", "未批准", "未获",
+                         "不予批准", "未予批准", "否决")),
+        InvalidationDef(EventType.BANKRUPTCY_REORGANIZATION, InvalidationSeverity.SEVERE,
+                        "重整投资人退出 / 终止投资协议",
+                        ("投资人退出", "终止投资", "解除投资", "投资人终止")),
+        # ---- 早期专属的「预警」：监管关注往往是终止前兆 ----
+        InvalidationDef(EventType.BANKRUPTCY_REORGANIZATION, InvalidationSeverity.WARNING,
+                        "重整进展受监管关注（问询 / 关注函 / 风险提示）",
+                        ("问询", "关注函", "风险提示", "监管函"),
+                        early_only=True),
+        InvalidationDef(EventType.RESTRUCTURING, InvalidationSeverity.WARNING,
+                        "早期筹划阶段受监管关注（问询 / 关注函 / 风险提示）",
+                        ("问询", "关注函", "风险提示"),
+                        early_only=True),
     ),
     open_question_templates=(
         "交易标的", "交易价格", "重组方案", "资产评估结果", "监管审核结果", "股东大会决议",

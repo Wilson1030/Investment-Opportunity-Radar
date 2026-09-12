@@ -176,6 +176,13 @@ def _build_one(
         if thesis_type == ThesisType.RESTRUCTURING.value
         else bool(invalidation_hits)
     )
+    # ★ 预警级别只提醒、不判死：早期待确认阶段收到监管关注值得知道，
+    #   但问询函不等于交易失败（规格 §23 的 severity 分级正为此存在）
+    warnings = (
+        restructuring_invalidation.warning_hits(invalidation_hits)
+        if thesis_type == ThesisType.RESTRUCTURING.value
+        else ()
+    )
 
     score = compute_rule_score(
         facts, thesis_type, ratio, evaluation=evaluation, invalidation_hits=invalidation_hits
@@ -345,6 +352,32 @@ def _build_one(
             # counterfactual 仅用于日志可读性；Alert 本身只存 before/after
             created_at=datetime.now(timezone.utc),
         ))
+
+    # ---- 预警提醒（不改状态）----
+    if warnings and not should_invalidate:
+        first = warnings[0]
+        already = session.exec(
+            select(Alert).where(
+                Alert.opportunity_id == opportunity_id,
+                Alert.alert_type == "thesis_weakened",
+                Alert.triggered_by_event_id == first.event_id,
+            )
+        ).first()
+        if already is None:
+            session.add(Alert(
+                opportunity_id=opportunity_id,
+                alert_type="thesis_weakened",
+                title="投资逻辑出现预警信号",
+                message=(
+                    f"你关注的「{definition.display_name}」逻辑出现{first.severity}级信号："
+                    f"{first.rule_description}"
+                ),
+                suggestion="暂不需要判定失效，但值得重新审视该机会",
+                score_before=score_before,
+                score_after=score.rule_score,
+                triggered_by_event_id=first.event_id,
+                created_at=datetime.now(timezone.utc),
+            ))
 
     if commit:
         session.commit()

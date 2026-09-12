@@ -75,13 +75,31 @@ def _paragraph_lookup(session: Session, announcement_id: int):
 
 
 def _mark_invalidating(event_type: EventType, title: str) -> bool:
-    """该事件是否会破坏某个已实现策略的逻辑（规格 §22 / §23）。"""
+    """该事件是否会破坏某个已实现策略的逻辑（规格 §22 / §23）。
+
+    ⚠ 这是**粗粒度的展示标记**，不是权威判定。权威判定在机会层
+    （strategy.invalidation_hits(facts) + should_invalidate），
+    因为它还依赖公司当前所处的阶段。
+
+    early_only 规则在这里必须跳过：它们是**有条件的** ——
+    早期待确认阶段收到问询函是终止前兆，但对已披露草案的机会是常规流程。
+    在事件层无从判断阶段，因此不能把这类规则烤进 Event.is_invalidating。
+    （踩过的坑：问询函因此被标成失效事件，导致「失效事件」的含义被稀释。）
+    """
     for code, definition in STRATEGIES.items():
         implementation = get_strategy(code)
         if isinstance(implementation, NotImplementedStrategy):
             continue
         for rule in definition.invalidating_events:
+            if getattr(rule, "early_only", False):
+                continue          # 有条件规则：留给机会层判定
             if rule.event_type is not event_type:
+                continue
+            none_of = getattr(rule, "title_none_of", ())
+            if none_of and any(kw in title for kw in none_of):
+                continue
+            all_of = getattr(rule, "title_all_of", ())
+            if all_of and not all(kw in title for kw in all_of):
                 continue
             if rule.title_contains and not any(kw in title for kw in rule.title_contains):
                 continue

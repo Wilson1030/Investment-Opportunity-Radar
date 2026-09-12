@@ -17,9 +17,40 @@ def rules() -> tuple:
     return STRATEGIES[ThesisType.RESTRUCTURING].invalidating_events
 
 
+#: 「已进入实质推进」的证据词 —— 出现它们说明不是早期苗头
+_PROGRESS_KEYWORDS = (
+    "预案", "报告书", "草案", "批复", "股东大会", "核准", "过户",
+    "审核通过", "无条件通过",
+)
+
+
+def has_progress_evidence(facts: StrategyFacts) -> bool:
+    """是否已经出现「进入实质推进」的证据。
+
+    用于 ``early_only`` 规则：对已经推进到预案/草案的机会，
+    收到问询函是常规流程，不该报警；对刚起步的苗头，监管关注往往是终止前兆。
+    """
+    return any(
+        any(kw in (event.title or "") for kw in _PROGRESS_KEYWORDS)
+        for event in facts.events
+    )
+
+
 def _matches(event: EventFact, definition) -> tuple[bool, str]:
     """事件是否命中某条失效条件。"""
     if event.event_type != definition.event_type:
+        return False, ""
+
+    title = event.title or ""
+
+    # 排除词优先：命中任一排除词即不成立
+    none_of = getattr(definition, "title_none_of", ())
+    if none_of and any(kw in title for kw in none_of):
+        return False, ""
+
+    # AND 语义：标题必须同时包含全部关键词（应对「宣告公司破产」这类插词）
+    all_of = getattr(definition, "title_all_of", ())
+    if all_of and not all(kw in title for kw in all_of):
         return False, ""
 
     # 标题关键词（若定义了）
@@ -41,8 +72,12 @@ def _matches(event: EventFact, definition) -> tuple[bool, str]:
 
 def detect(facts: StrategyFacts) -> tuple[InvalidationHit, ...]:
     hits: list[InvalidationHit] = []
+    early = not has_progress_evidence(facts)
     for event in facts.events:
         for definition in rules():
+            # early_only 规则只对「尚无进展证据」的机会生效
+            if getattr(definition, "early_only", False) and not early:
+                continue
             ok, reason = _matches(event, definition)
             if ok:
                 hits.append(
@@ -61,6 +96,15 @@ def is_terminal(hits: tuple[InvalidationHit, ...]) -> bool:
     return any(h.severity == InvalidationSeverity.TERMINAL.value for h in hits)
 
 
+def warning_hits(hits: tuple[InvalidationHit, ...]) -> tuple[InvalidationHit, ...]:
+    """仅「预警」级别的命中 —— 只提醒，不改状态。
+
+    ★ 早期待确认阶段收到监管关注时应该提醒，但不该判死：
+    问询函不等于交易失败（规格 §23 的 severity 分级正为此存在）。
+    """
+    return tuple(h for h in hits if h.severity == InvalidationSeverity.WARNING.value)
+
+
 def should_invalidate(hits: tuple[InvalidationHit, ...]) -> bool:
     """是否应把机会迁移到 ``invalidated``。
 
@@ -73,4 +117,5 @@ def should_invalidate(hits: tuple[InvalidationHit, ...]) -> bool:
     )
 
 
-__all__ = ["detect", "is_terminal", "rules", "should_invalidate"]
+__all__ = ["detect", "has_progress_evidence", "is_terminal", "rules",
+           "should_invalidate", "warning_hits"]

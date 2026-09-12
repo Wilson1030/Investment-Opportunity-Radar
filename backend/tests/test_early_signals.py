@@ -217,3 +217,130 @@ def test_profile_can_toggle_early_signals():
     assert profile.accept_early_signals is True, "默认开启（宁可见到并标注，也不要静默漏掉）"
     profile.accept_early_signals = False
     assert profile.accept_early_signals is False
+
+
+# --------------------------------------------------------------------------- #
+# 早期苗头的失效检测（本次修复的核心：比漏掉更糟的是挂着不放）
+# --------------------------------------------------------------------------- #
+TERMINAL_CASES = [
+    ("关于法院裁定不予受理公司重整申请的公告", "法院不予受理"),
+    ("关于债权人撤回对公司重整申请的公告", "撤回"),
+    ("关于法院宣告公司破产的公告", "宣告破产"),
+    ("关于终止重整程序的公告", "终止重整"),
+    ("关于重大资产重组终止的公告", "重组终止"),
+]
+
+SEVERE_CASES = [
+    ("关于重整计划未获法院批准的公告", "未获批准"),
+    ("关于重整投资人终止投资协议的公告", "投资人退出"),
+]
+
+NOT_INVALIDATING = [
+    # 早期苗头本身不是失效事件 —— 它只是确定性低
+    "关于债权人申请对公司进行重整的公告",
+    "关于法院裁定受理公司重整申请的公告",
+    # 这些看起来含关键词，实际都是「重整推进中/已成功」
+    "关于破产重整计划获得法院批准的公告",
+    "关于法院宣告破产重整计划执行完毕的公告",
+]
+
+
+def test_failed_reorganization_paths_are_terminal():
+    """★ 修复前这些**全部漏掉**：失效规则完全没有覆盖 BANKRUPTCY_REORGANIZATION。
+
+    后果是：一个重整苗头死掉了，系统会永远把它挂在雷达上标着「待确认」——
+    这比漏掉它更糟（漏掉是不作为，挂着不放是主动误导）。
+    """
+    from app.strategies.restructuring import invalidation
+
+    for title, _hint in TERMINAL_CASES:
+        _, stage, _ = ladder_of(title)
+        facts = StrategyFacts(
+            company=CompanyFacts(id=1),
+            events=(EventFact(id=1, event_type=classifier.classify_announcement(title),
+                              title=title),),
+        )
+        hits = STRATEGY.invalidation_hits(facts)
+        assert hits, f"未命中失效：{title}"
+        assert hits[0].severity == "terminal", f"{title} → {hits[0].severity}"
+        assert invalidation.should_invalidate(hits), f"{title} 应触发状态迁移"
+        assert stage.score == 0.0, "失效路径的催化强度必须归零"
+
+
+def test_partial_failures_are_severe_not_terminal():
+    for title, _hint in SEVERE_CASES:
+        facts = StrategyFacts(
+            company=CompanyFacts(id=1),
+            events=(EventFact(id=1, event_type=classifier.classify_announcement(title),
+                              title=title),),
+        )
+        hits = STRATEGY.invalidation_hits(facts)
+        assert hits and hits[0].severity == "severe", f"{title} → {hits}"
+
+
+def test_mid_flight_and_successful_events_are_not_invalidating():
+    """★ 反向验证：推进中的、以及重整**成功**的公告都不得被判失效。
+
+    「关于法院宣告破产重整计划执行完毕的公告」是重整成功，
+    纯关键词 AND 匹配（宣告 + 破产）会误判 —— 必须靠排除词挡住。
+    """
+    for title in NOT_INVALIDATING:
+        facts = StrategyFacts(
+            company=CompanyFacts(id=1),
+            events=(EventFact(id=1, event_type=classifier.classify_announcement(title),
+                              title=title),),
+        )
+        assert STRATEGY.invalidation_hits(facts) == (), f"被误判为失效：{title}"
+
+
+def test_early_stage_regulatory_attention_is_a_warning_not_a_kill():
+    """★ 「早期的失效要更敏感」的正确做法：**提醒，但不判死**。
+
+    早期待确认阶段收到监管问询往往是终止前兆，值得提醒；
+    但对已经披露草案的机会，问询函是常规流程，报警就是噪声。
+    """
+    from app.strategies.restructuring import invalidation
+
+    early_title = "关于收到交易所对公司重整事项问询函的公告"
+    early = StrategyFacts(
+        company=CompanyFacts(id=1),
+        events=(EventFact(id=1, event_type=classifier.classify_announcement(early_title),
+                          title=early_title),),
+    )
+    early_hits = STRATEGY.invalidation_hits(early)
+    assert invalidation.warning_hits(early_hits), "早期苗头收到问询应产生预警"
+    assert not invalidation.should_invalidate(early_hits), "预警不得改变状态"
+
+    # 已推进：同样内容不再报警
+    progressed = StrategyFacts(
+        company=CompanyFacts(id=1),
+        events=(
+            EventFact(id=1, event_type=classifier.classify_announcement(early_title),
+                      title=early_title),
+            EventFact(id=2, event_type=classifier.classify_announcement(
+                "关于重大资产重组报告书（草案）的公告"), title="关于重大资产重组报告书（草案）的公告"),
+        ),
+    )
+    assert invalidation.has_progress_evidence(progressed)
+    assert invalidation.warning_hits(STRATEGY.invalidation_hits(progressed)) == (), (
+        "已进入草案阶段，问询函是常规流程，不应报警"
+    )
+
+
+def test_event_level_flag_does_not_bake_in_conditional_rules():
+    """事件层的 is_invalidating 是粗粒度展示标记，不得烤进有条件规则。
+
+    ``early_only`` 的预警依赖机会所处阶段，在事件层无从判断 ——
+    踩过的坑：问询函因此被标成失效事件，稀释了「失效事件」的含义。
+    """
+    from app.pipeline.event_writer import _mark_invalidating
+
+    assert _mark_invalidating(
+        classifier.classify_announcement("关于重大资产重组终止的公告"),
+        "关于重大资产重组终止的公告",
+    ) is True
+    # 问询函只触发有条件预警 → 事件层不得标记
+    assert _mark_invalidating(
+        classifier.classify_announcement("关于收到交易所对重大资产重组事项问询函的公告"),
+        "关于收到交易所对重大资产重组事项问询函的公告",
+    ) is False
