@@ -92,6 +92,64 @@ POST_DEAL_KEYWORDS: tuple[str, ...] = (
 )
 
 
+#: **一定**属于第三方主体 —— 出现即说明重整/重组的主体不是上市公司本身
+_ALWAYS_THIRD_PARTY: tuple[str, ...] = (
+    "全资子公司", "控股子公司", "子公司", "孙公司", "参股公司", "联营公司",
+    "原控股股东", "原实际控制人", "持股 5% 以上股东", "重要股东",
+)
+
+#: **看谓语才判定**的主体：控股股东 / 实际控制人
+#:
+#: ★ 这两者要分情况：
+#:   「**控股股东**筹划重大事项停牌的公告」→ 现控股股东筹划的事通常**涉及上市公司**
+#:     （转让股份 / 注入资产），高度相关 → **不排除**
+#:   「**控股股东**债权人撤回**破产重整**申请的公告」→ 控股股东自己在破产重整，
+#:     与上市公司的重组预期无关 → **排除**
+#: 区分依据是谓语里有没有破产司法程序的关键词。
+_SHAREHOLDER_SUBJECTS: tuple[str, ...] = (
+    "控股股东", "实际控制人", "第一大股东",
+)
+
+#: 破产司法程序的谓语标记（与上面的主体词同时出现才判为第三方）
+_BANKRUPTCY_PREDICATES: tuple[str, ...] = (
+    "破产", "重整申请", "申请重整", "重整程序", "重整计划", "预重整",
+    "债权人", "管理人", "债权申报", "宣告破产", "终止重整",
+)
+
+#: 「并集」标记 —— 出现它们说明**本公司也在主体之内**，不算主体错位
+#: 例：「关于法院决定对公司及全资子公司……启动预重整的公告」
+_SELF_INCLUSIVE_MARKERS: tuple[str, ...] = (
+    "公司及", "本公司及", "公司、", "公司与其", "公司连同", "公司自身",
+)
+
+
+def subject_is_third_party(title: str) -> bool:
+    """公告主体是否为**第三方**（子公司 / 孙公司 / 控股股东 / 前控股股东…）。
+
+    ★ 为什么需要：「关于法院裁定受理**全资子公司**破产重整的公告」
+    讲的是子公司重整，**不是母公司的重组预期**。
+    实测「重整」抽样 15 条里有 7 条（47%）属于此类 ——
+    不区分的话会持续制造幻影机会。
+
+    这是**确定性的标题模式识别**（不涉及「重整会不会成功」这类语义判断），
+    因此放在规则层（规格 §28）。
+
+    注意：含「公司及」这类并集标记时不视为错位 ——
+    「关于法院决定对**公司及全资子公司**启动预重整的公告」里本公司确实在内。
+    """
+    title = title or ""
+    if any(marker in title for marker in _SELF_INCLUSIVE_MARKERS):
+        return False
+    if any(subject in title for subject in _ALWAYS_THIRD_PARTY):
+        return True
+    # 控股股东 / 实际控制人：只有谓语是「自己的破产司法程序」才算第三方
+    if any(subject in title for subject in _SHAREHOLDER_SUBJECTS) and any(
+        predicate in title for predicate in _BANKRUPTCY_PREDICATES
+    ):
+        return True
+    return False
+
+
 def is_post_deal(title: str) -> bool:
     """标题是否属于「重组已完成、只剩后续手续」的存量信息。"""
     return any(kw in (title or "") for kw in POST_DEAL_KEYWORDS)
@@ -158,6 +216,7 @@ __all__ = [
     "POST_DEAL_KEYWORDS",
     "is_non_restructuring",
     "is_post_deal",
+    "subject_is_third_party",
     "KeywordRule",
     "classify_all",
     "classify_announcement",

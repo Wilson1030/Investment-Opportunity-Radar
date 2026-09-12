@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+from app.engine import classifier
 from app.facts import EventFact, StrategyFacts
 from app.models.enums import EventType, ReliabilityLevel, ThesisType
 from app.strategies.base import (
@@ -90,9 +91,22 @@ def _best_level(events: tuple[EventFact, ...]) -> ReliabilityLevel | None:
     return min(levels, key=lambda lv: _LEVEL_RANK.index(lv.value))
 
 
+def _own_subject_events(events: tuple[EventFact, ...]) -> tuple[EventFact, ...]:
+    """只保留**主体是上市公司本身**的事件。
+
+    ★ 实测「重整」抽样 15 条里 7 条（47%）是子公司 / 孙公司 / 控股股东 /
+    前控股股东的重整 —— 那不是母公司的重组预期。
+    不区分会让 C1 与催化剂阶梯被第三方事件灌满。
+    """
+    return tuple(e for e in events if not classifier.subject_is_third_party(e.title))
+
+
 def _condition_c1(facts: StrategyFacts) -> ConditionResult:
-    """C1 出现重大资产重组相关公告（A 类）。"""
-    events = facts.events_of(*_DEAL_EVENTS)
+    """C1 出现重大资产重组相关公告（A 类）。
+
+    只认**主体是本公司**的公告：子公司重整 ≠ 母公司重组预期。
+    """
+    events = _own_subject_events(facts.events_of(*_DEAL_EVENTS))
     definition = _DEAL_C1
     if not events:
         return ConditionResult(definition.key, definition.label, definition.weight, 0.0,
@@ -194,7 +208,8 @@ class RestructuringStrategy:
         return self.catalyst_strength(facts).early
 
     def catalyst_strength(self, facts: StrategyFacts) -> CatalystStage:
-        events = facts.events_of(*_LADDER_EVENTS)
+        # 主体错位的事件不参与阶梯：子公司重整不该给母公司定阶段
+        events = _own_subject_events(facts.events_of(*_LADDER_EVENTS))
         if not events:
             return CatalystStage("无重组 / 重整类事件", 0.0, "未发现重组、重整或收购类公告")
 

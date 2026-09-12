@@ -344,3 +344,92 @@ def test_event_level_flag_does_not_bake_in_conditional_rules():
         classifier.classify_announcement("关于收到交易所对重大资产重组事项问询函的公告"),
         "关于收到交易所对重大资产重组事项问询函的公告",
     ) is False
+
+
+# --------------------------------------------------------------------------- #
+# 公告主体：「重整」真实抽样暴露的最大一类假阳性（47%）
+# --------------------------------------------------------------------------- #
+SUBJECT_CASES = [
+    # (标题, 是否第三方主体, 原因)
+    ("关于法院裁定受理全资子公司破产重整的公告", True, "子公司重整"),
+    ("关于孙公司破产重整事项的进展公告", True, "孙公司重整"),
+    ("关于公司原控股股东破产重整进展的公告", True, "前控股股东重整"),
+    ("三安光电股份有限公司关于控股股东债权人撤回破产重整申请的公告", True,
+     "控股股东自己在破产重整"),
+    ("关于实际控制人破产重整的进展公告", True, "实控人自己在破产重整"),
+    ("关于原相对控股子公司重整事项进展暨完成股权变更的公告", True, "子公司"),
+    # 含「公司及」→ 本公司也在主体内，不算错位
+    ("关于法院决定对公司及全资子公司启动预重整的公告", False, "含本公司"),
+    ("关于公司及全资子公司预重整债权申报的公告", False, "含本公司"),
+    # 本公司自身
+    ("西藏发展股份有限公司重整计划（草案）", False, "本公司"),
+    ("龙元建设关于法院决定对公司进行预重整的公告", False, "本公司"),
+    # ★ 控股股东要按谓语区分
+    ("关于控股股东筹划重大事项停牌的公告", False, "现控股股东筹划，通常涉及上市公司"),
+    ("关于控股股东拟协议转让公司股份的公告", False, "涉及上市公司股份"),
+]
+
+
+@pytest.mark.parametrize("title,third_party,why", SUBJECT_CASES)
+def test_subject_is_third_party(title, third_party, why):
+    """★ 「重整」真实抽样 15 条里 7 条（47%）的主体不是上市公司本身。
+
+    子公司的重整不是母公司的重组预期 —— 不区分会持续制造幻影机会。
+    """
+    assert classifier.subject_is_third_party(title) is third_party, f"{title}（{why}）"
+
+
+def test_third_party_subject_does_not_build_a_thesis():
+    """主体错位的事件不得进入 C1，也不得给母公司定催化阶段。"""
+    from app.models.enums import ReliabilityLevel
+    from app.strategies.restructuring.rules import _condition_c1
+
+    def measure(title: str):
+        facts = StrategyFacts(
+            company=CompanyFacts(id=1),
+            events=(EventFact(id=1, event_type=EventType.BANKRUPTCY_REORGANIZATION,
+                              title=title, evidence_level=ReliabilityLevel.A),),
+        )
+        return _condition_c1(facts).satisfaction, STRATEGY.catalyst_strength(facts).score
+
+    third_sat, third_stage = measure("关于法院裁定受理全资子公司破产重整的公告")
+    assert third_sat == 0.0, "子公司重整不得让母公司命中 C1"
+    assert third_stage == 0.0, "子公司重整不得给母公司定阶段"
+
+    own_sat, own_stage = measure("关于法院裁定受理公司重整申请的公告")
+    assert own_sat > 0, "本公司重整必须命中 C1"
+    assert own_stage > 0
+
+    mixed_sat, mixed_stage = measure("关于法院决定对公司及全资子公司启动预重整的公告")
+    assert mixed_sat > 0, "「公司及子公司」含本公司，必须命中"
+    assert mixed_stage > 0
+
+
+# --------------------------------------------------------------------------- #
+# 跨类型失效覆盖：LLM 选任一类型都能命中
+# --------------------------------------------------------------------------- #
+BANKRUPTCY_FAILURES = [
+    ("关于法院裁定不予受理公司重整申请的公告", "terminal"),
+    ("关于终止重整程序的公告", "terminal"),
+    ("关于法院宣告公司破产的公告", "terminal"),
+    ("关于重整计划未获法院批准的公告", "severe"),
+]
+
+
+@pytest.mark.parametrize("title,severity", BANKRUPTCY_FAILURES)
+def test_bankruptcy_failures_detected_whichever_type_llm_picks(title, severity):
+    """★ RESTRUCTURING 与 BANKRUPTCY_REORGANIZATION 语义重叠，实测 LLM 会把
+    「重整计划（草案）」判成 RESTRUCTURING（9/15 条）。
+
+    失效规则按 event_type 精确匹配 —— 若不跨类型覆盖，
+    一条「法院不予受理重整申请」被 LLM 判成 RESTRUCTURING 就会**漏掉失效**，
+    等于失效检测被枚举选择绕过。
+    """
+    for event_type in (EventType.BANKRUPTCY_REORGANIZATION, EventType.RESTRUCTURING):
+        facts = StrategyFacts(
+            company=CompanyFacts(id=1),
+            events=(EventFact(id=1, event_type=event_type, title=title),),
+        )
+        hits = STRATEGY.invalidation_hits(facts)
+        assert hits, f"{title} 作为 {event_type.value} 时漏掉失效"
+        assert hits[0].severity == severity, f"{title} / {event_type.value} → {hits[0].severity}"

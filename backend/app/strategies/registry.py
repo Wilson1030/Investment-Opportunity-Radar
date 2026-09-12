@@ -212,6 +212,26 @@ _RESTRUCTURING = StrategyDef(
         InvalidationDef(EventType.LITIGATION, InvalidationSeverity.SEVERE,
                         "重大诉讼致交易基础受损", amount_ratio_gt=0.3),
         # ---- 破产重整类 ★ 早期苗头的主要死法 ----
+        # ⚠ 跨类型覆盖：RESTRUCTURING 与 BANKRUPTCY_REORGANIZATION 语义重叠，
+        #   实测 LLM 会把「重整计划（草案）」判成 RESTRUCTURING（9/15 条）。
+        #   失效规则按 event_type 精确匹配，若不跨类型覆盖，
+        #   一条「法院不予受理重整申请」被 LLM 判成 RESTRUCTURING 就会**漏掉失效** ——
+        #   等于我刚修好的失效检测被枚举选择绕过。
+        #   所以下面这几条对两个类型各写一遍（关键词相同）。
+        InvalidationDef(EventType.RESTRUCTURING, InvalidationSeverity.TERMINAL,
+                        "法院不予受理 / 驳回重整申请",
+                        ("不予受理", "驳回", "不予立案")),
+        InvalidationDef(EventType.RESTRUCTURING, InvalidationSeverity.TERMINAL,
+                        "终止重整程序 / 转入破产清算",
+                        ("终止重整", "终止破产重整", "终止重整程序",
+                         "破产清算", "重整失败")),
+        InvalidationDef(EventType.RESTRUCTURING, InvalidationSeverity.TERMINAL,
+                        "法院宣告破产",
+                        title_all_of=("宣告", "破产"),
+                        title_none_of=("执行完毕", "执行完成", "重整计划", "批准", "受理")),
+        InvalidationDef(EventType.RESTRUCTURING, InvalidationSeverity.SEVERE,
+                        "重整计划未获通过 / 未获批准",
+                        ("未获", "未通过", "不予批准", "未予批准")),
         # 之前完全没有覆盖这类事件，导致「死掉的苗头永远挂着」。
         InvalidationDef(EventType.BANKRUPTCY_REORGANIZATION, InvalidationSeverity.TERMINAL,
                         "法院不予受理 / 驳回重整申请",
