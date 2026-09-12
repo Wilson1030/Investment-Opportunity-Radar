@@ -20,7 +20,15 @@ from sqlmodel import Session, select
 from app.engine import classifier, guard
 from app.ingest.base import ParsedDocument, RawAnnouncement
 from app.models.enums import ParseStatus, ReliabilityLevel, SourceType
-from app.models.knowledge import Announcement, Company, News, Paragraph, Stock
+from app.models.knowledge import (
+    Announcement,
+    Company,
+    FinancialMetric,
+    FinancialPeriod,
+    News,
+    Paragraph,
+    Stock,
+)
 
 
 @dataclass(frozen=True)
@@ -185,6 +193,76 @@ def replace_paragraphs(
     return written
 
 
+def upsert_financials(
+    session: Session,
+    company_id: int,
+    periods: list,
+    *,
+    source_url: str | None = None,
+    commit: bool = True,
+) -> int:
+    """写入结构化财务期与指标（幂等：同一 ``(company_id, period, report_type)`` 更新而非新增）。
+
+    返回写入的**期数**。
+
+    ★ 只有非 ``None`` 的指标才落库 —— 缺失就是不写，**不用 0 或均值补**
+    （财务数字补错的代价比缺失大得多）。
+    """
+    from datetime import date as _date
+
+    from app.ingest.financials import report_type_of
+
+    written = 0
+    for item in periods:
+        if getattr(item, "is_empty", False):
+            continue
+        period_end = _date.fromisoformat(item.period_end)
+        report_type = report_type_of(item.period_end)
+
+        row = session.exec(
+            select(FinancialPeriod).where(
+                FinancialPeriod.company_id == company_id,
+                FinancialPeriod.period == item.period,
+                FinancialPeriod.report_type == report_type,
+            )
+        ).first()
+        if row is None:
+            row = FinancialPeriod(
+                company_id=company_id,
+                period=item.period,
+                period_end=period_end,
+                report_type=report_type,
+                source_url=source_url,
+            )
+            session.add(row)
+            session.flush()
+        written += 1
+
+        period_id = int(row.id or 0)
+        for metric, value in item.values.items():
+            if value is None:
+                continue
+            yoy = item.yoy.get(metric)
+            existing = session.exec(
+                select(FinancialMetric).where(
+                    FinancialMetric.period_id == period_id,
+                    FinancialMetric.metric == metric,
+                )
+            ).first()
+            if existing is None:
+                session.add(FinancialMetric(
+                    period_id=period_id, metric=metric, value=value, yoy=yoy,
+                ))
+            else:
+                existing.value = value
+                existing.yoy = yoy
+                session.add(existing)
+
+    if commit:
+        session.commit()
+    return written
+
+
 def upsert_news(
     session: Session, company_id: int | None, item: dict, *, dry_run: bool = False,
     commit: bool = True,
@@ -226,6 +304,7 @@ def source_type_of(raw: RawAnnouncement) -> SourceType:
 __all__ = [
     "UpsertOutcome",
     "replace_paragraphs",
+    "upsert_financials",
     "source_type_of",
     "upsert_announcement",
     "upsert_company",

@@ -391,7 +391,49 @@ def _collect_market_first(
         f"失败/需 OCR {parse_failures} 条（失败率 {report.quality.parse_failure_rate:.2f}）"
     )
 
+    _collect_financials(session, company_ids, report)
+
     return company_ids, _pending_announcements(session)
+
+
+def _collect_financials(
+    session: Session, company_ids: list[int], report: funnel.PipelineReport
+) -> None:
+    """为候选公司采结构化财务数据。
+
+    ★ 为什么必须在候选池阶段就采：``C4``（经营困境）、``FUNDAMENTALS``、``RISK``
+    三个维度全都依赖财务数据。不采的话所有机会卡的这三项都是同一个数，
+    **区分度只剩「催化剂阶段」一个维度**（首次 live 实测就是这个结果）。
+
+    数据源用同花顺（东方财富在本环境不可达），见 :mod:`app.ingest.financials`。
+    单只失败不阻塞整批 —— 记录错误后继续。
+    """
+    from app.ingest.financials import FinancialSource
+    from app.ingest.normalizer import upsert_financials
+    from app.models.knowledge import Stock
+
+    source = FinancialSource()
+    ok = 0
+    for company_id in company_ids:
+        stock = session.exec(select(Stock).where(Stock.company_id == company_id)).first()
+        if stock is None:
+            continue
+        try:
+            periods = source.fetch(stock.code)
+        except AdapterError as exc:
+            report.add_error("financials", str(exc), code=stock.code)
+            continue
+        if not periods:
+            report.add_error("financials", "未取到财务期", code=stock.code)
+            continue
+        upsert_financials(session, company_id, periods, commit=False)
+        ok += 1
+
+    session.commit()
+    report.quality.field_missing_rate = (
+        1.0 - ok / len(company_ids) if company_ids else 0.0
+    )
+    print(f"[财务] {ok}/{len(company_ids)} 家取到结构化财务（同花顺）")
 
 
 def _candidate_pairs(

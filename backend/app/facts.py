@@ -64,6 +64,8 @@ class FinancialFacts:
     debt_ratio_rising: bool = False
     #: 指标恶化但已归因于一次性因素（减值 / 重组费用）→ 不扣分（INV-F1）
     deteriorating_attributed_to_one_off: bool = False
+    #: 现金流数据是否为「每股经营现金流」代理（真实总额不可得时）
+    ocf_is_proxy: bool = False
 
 
 @dataclass(frozen=True)

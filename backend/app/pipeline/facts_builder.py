@@ -191,9 +191,20 @@ def build_financial_facts(session: Session, company_id: int) -> FinancialFacts:
     net_profit = _series(session, company_id, "net_profit")
     revenue = _series(session, company_id, "revenue")
     margin = _series(session, company_id, "gross_margin")
-    ocf = _series(session, company_id, "ocf")
-    receivable = _series(session, company_id, "receivable")
     debt_ratio = _series(session, company_id, "debt_ratio")
+
+    # 现金流：优先用总额（akshare 的财报表），没有则用**每股经营现金流**作代理 ——
+    # 只看「符号」与「趋势」，两者都成立。代理方法会记录在代码注释里，不假装是总额。
+    ocf = _series(session, company_id, "ocf")
+    ocf_is_proxy = False
+    if not ocf:
+        ocf = _series(session, company_id, "ocf_per_share")
+        ocf_is_proxy = bool(ocf)
+
+    # 应收账款：没有余额时用**周转天数**的变化方向近似 ——
+    # 「周转天数上升 且 营收增速 ≤ 0」才判定为应收账款问题（两者都恶化）
+    receivable = _series(session, company_id, "receivable")
+    receivable_days = _series(session, company_id, "receivable_days")
 
     if not any((net_profit, revenue, margin, ocf, receivable, debt_ratio)):
         return FinancialFacts()
@@ -222,11 +233,26 @@ def build_financial_facts(session: Session, company_id: int) -> FinancialFacts:
         loss_years=_trailing_count(net_profit, lambda v: v < 0),
         revenue_improving_quarters=_trailing_count(revenue, lambda v: v > 0, use_yoy=True),
         margin_improving_quarters=_trailing_count(margin, lambda v: v > 0, use_yoy=True),
+        # 注：``ocf`` 可能是每股代理值，但「为正 / 同比改善」的语义与总额一致
         ocf_positive=bool(latest_ocf is not None and latest_ocf > 0),
         ocf_improving=bool(latest_ocf_yoy is not None and latest_ocf_yoy > 0),
+        ocf_is_proxy=ocf_is_proxy,
         profitable_years=_trailing_count(net_profit, lambda v: v > 0),
-        receivable_growth_exceeds_revenue=bool(
-            receivable_yoy is not None and revenue_yoy is not None and receivable_yoy > revenue_yoy
+        receivable_growth_exceeds_revenue=(
+            # 优先用余额同比（精确）
+            bool(
+                receivable_yoy is not None and revenue_yoy is not None
+                and receivable_yoy > revenue_yoy
+            )
+            if receivable
+            # 回退：周转天数上升 且 营收未增长（近似，两者都恶化才算）
+            else bool(
+                receivable_days
+                and _trailing_count(receivable_days, lambda v: True) >= 0
+                and len(receivable_days) >= 2
+                and (receivable_days[-1][1] or 0) > (receivable_days[-2][1] or 0)
+                and (revenue_yoy is None or revenue_yoy <= 0)
+            )
         ),
         debt_ratio_rising=bool(
             _trailing_count(debt_ratio, lambda v: v > 0, use_yoy=True) > 0
