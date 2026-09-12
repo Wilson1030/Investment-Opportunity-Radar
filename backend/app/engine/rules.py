@@ -115,6 +115,25 @@ def _clamp(value: float, low: float = 0.0, high: float = 100.0) -> float:
     return max(low, min(high, value))
 
 
+def _evidence_ids(facts: StrategyFacts, *types: EventType) -> tuple[int, ...]:
+    """★ 收集事件所绑定的**证据 ID**（去重保序）。
+
+    踩过的坑（用户反馈「跳转原文别的公司是错的」）：
+    RuleHit.evidence_ids 里塞的是 Event.id，而 Evidence.id 是另一套
+    自增序列 —— 于是每条证据都指到了**别的公司**的公告，逐家错位一格。
+    ScoreItem / Opportunity.supporting_evidence_ids / 前端「查看证据」
+    全部跟着错，而所有测试都没发现（没有测试校验「证据是否属于同一家公司」）。
+
+    注意 _event_ids 只用于统计，绝不能当证据 ID 用。
+    """
+    seen: list[int] = []
+    for event in facts.events_of(*types):
+        for evidence_id in event.evidence_ids:
+            if evidence_id not in seen:
+                seen.append(evidence_id)
+    return tuple(seen)
+
+
 def _event_ids(facts: StrategyFacts, *types: EventType) -> tuple[int, ...]:
     return tuple(e.id for e in facts.events_of(*types))
 
@@ -182,7 +201,7 @@ def compute_event_catalyst_dimension(
             EVENT_CATALYST_INVALIDATION_PENALTY,
             "出现失效事件，且该事件不作为正向催化计分"
             f"（{'、'.join(e.title[:24] for e in invalidating_events[:2])}）",
-            tuple(e.id for e in invalidating_events),
+            _evidence_ids(facts, *support),
         ))
 
     if any(e.evidence_level is ReliabilityLevel.A for e in support_events):
@@ -190,7 +209,7 @@ def compute_event_catalyst_dimension(
         hits.append(RuleHit(
             "R-GEN-EV-01", ScoreDimension.EVENT_CATALYST, 40,
             "存在 A 类公告直接对应核心事件类型",
-            _event_ids(facts, *support),
+            _evidence_ids(facts, *support),
         ))
 
     distinct = {e.event_type for e in support_events}
@@ -199,7 +218,7 @@ def compute_event_catalyst_dimension(
         hits.append(RuleHit(
             "R-GEN-EV-02", ScoreDimension.EVENT_CATALYST, 25,
             f"同期出现 {len(distinct)} 个不同事件类型（组合催化）",
-            tuple(e.id for e in support_events),
+            _evidence_ids(facts, *support),
         ))
 
     significant = [e for e in support_events if e.amount_ratio >= 0.10]
@@ -208,7 +227,7 @@ def compute_event_catalyst_dimension(
         hits.append(RuleHit(
             "R-GEN-EV-03", ScoreDimension.EVENT_CATALYST, 15,
             f"事件涉及金额达显著阈值（最高占比 {max(e.amount_ratio for e in significant):.2f}）",
-            tuple(e.id for e in significant),
+            _evidence_ids(facts, *support),
         ))
 
     if any(e.counterparty_known for e in support_events):
@@ -216,7 +235,7 @@ def compute_event_catalyst_dimension(
         hits.append(RuleHit(
             "R-GEN-EV-04", ScoreDimension.EVENT_CATALYST, 10,
             "事件牵涉可识别的产业方 / 头部企业",
-            tuple(e.id for e in support_events if e.counterparty_known),
+            _evidence_ids(facts, *support),
         ))
 
     if best_level is ReliabilityLevel.C:
@@ -387,7 +406,7 @@ def compute_shareholder_dimension(facts: StrategyFacts) -> DimensionComputation:
                 "股东结构基线")
     ]
     total = SHAREHOLDER_BASELINE
-    control_events = _event_ids(facts, EventType.CONTROL_CHANGE)
+    control_events = _evidence_ids(facts, EventType.CONTROL_CHANGE)
 
     if sh.controlling_shareholder_changed or sh.actual_controller_changed or control_events:
         total += 40
@@ -397,12 +416,12 @@ def compute_shareholder_dimension(facts: StrategyFacts) -> DimensionComputation:
         total += 20
         hits.append(RuleHit("R-GEN-SH-02", ScoreDimension.SHAREHOLDER_STRUCTURE, 20,
                             "控股股东或管理层增持",
-                            _event_ids(facts, EventType.SHAREHOLDER_BUY)))
+                            _evidence_ids(facts, EventType.SHAREHOLDER_BUY)))
     if sh.buyback and sh.buyback_scale_significant:
         total += 20
         hits.append(RuleHit("R-GEN-SH-03", ScoreDimension.SHAREHOLDER_STRUCTURE, 20,
                             "公司回购且规模显著",
-                            _event_ids(facts, EventType.BUYBACK)))
+                            _evidence_ids(facts, EventType.BUYBACK)))
     if sh.high_pledge:
         total -= 15
         hits.append(RuleHit("R-GEN-SH-04", ScoreDimension.SHAREHOLDER_STRUCTURE, -15,
@@ -411,7 +430,7 @@ def compute_shareholder_dimension(facts: StrategyFacts) -> DimensionComputation:
         total -= 10
         hits.append(RuleHit("R-GEN-SH-05", ScoreDimension.SHAREHOLDER_STRUCTURE, -10,
                             "控股股东减持",
-                            _event_ids(facts, EventType.SHAREHOLDER_SELL)))
+                            _evidence_ids(facts, EventType.SHAREHOLDER_SELL)))
 
     return DimensionComputation(ScoreDimension.SHAREHOLDER_STRUCTURE, _clamp(total), tuple(hits))
 

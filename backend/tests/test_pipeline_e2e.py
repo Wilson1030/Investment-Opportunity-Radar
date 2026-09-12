@@ -569,3 +569,105 @@ def test_extract_workers_defaults_to_one():
     from app.pipeline.runner import PipelineOptions
 
     assert PipelineOptions().extract_workers == 1
+
+
+# --------------------------------------------------------------------------- #
+# ★★ 证据必须属于同一家公司（用户反馈的那个 bug 的守卫）
+# --------------------------------------------------------------------------- #
+def test_supporting_evidence_belongs_to_the_same_company(pipeline_outcome, engine):
+    """★★ **这是本项目最严重的一类数据错误**，此前所有测试都没发现。
+
+    用户反馈：「跳转原文别的公司是错的」。
+
+    根因：``ConditionResult.evidence_ids`` 与 ``RuleHit.evidence_ids`` 里装的
+    是 ``EventFact.id``（**事件 ID**），而不是**证据 ID**。
+    ``Event`` 与 ``Evidence`` 是两张表、两套自增 ID，数值范围还重叠 ——
+    于是每条证据都指到了**别的公司**的公告，逐家错位一格。
+
+    为什么之前的测试抓不到：**没有任何测试校验「证据是否属于同一家公司」**。
+    大家只验证了「有证据」「证据数量对」「子串校验通过」——
+    而错位的证据照样能满足这些断言（子串校验是对**证据自己指向的段落**做的，
+    自洽但张冠李戴）。
+
+    ⇒ 所以这条测试是必要的：**跨实体引用必须校验归属**。
+    """
+    from app.models.knowledge import Announcement
+
+    with Session(engine) as s:
+        checked = 0
+        for opportunity in s.exec(
+            select(Opportunity).where(Opportunity.supporting_evidence_ids != None)  # noqa: E711
+        ).all():
+            company_id = opportunity.company_id
+            for evidence_id in opportunity.supporting_evidence_ids or []:
+                evidence = s.get(Evidence, evidence_id)
+                assert evidence is not None, f"证据 {evidence_id} 不存在"
+
+                announcement = s.get(Announcement, evidence.announcement_id)
+                assert announcement is not None, (
+                    f"机会 #{opportunity.id} 的证据 {evidence_id} 没有对应公告"
+                )
+                assert announcement.company_id == company_id, (
+                    f"★ 机会 #{opportunity.id}（公司 {company_id}）的证据 {evidence_id} "
+                    f"却属于公司 {announcement.company_id}"
+                    f"（公告：{announcement.title[:30]}）—— 跨实体引用错位"
+                )
+                checked += 1
+        assert checked > 0, "至少应校验到一条证据"
+
+
+def test_score_items_reference_evidence_of_the_same_company(pipeline_outcome, engine):
+    """评分项里的证据引用同样必须属于同一家公司（同一个 bug 的另一处出口）。"""
+    from app.models.knowledge import Announcement
+
+    with Session(engine) as s:
+        checked = 0
+        for item in s.exec(select(ScoreItem)).all():
+            if not item.evidence_ids:
+                continue
+            opportunity = s.get(Opportunity, item.opportunity_id)
+            assert opportunity is not None
+            for evidence_id in item.evidence_ids:
+                evidence = s.get(Evidence, evidence_id)
+                assert evidence is not None, (
+                    f"评分项 {item.rule_id} 引用了不存在的证据 {evidence_id}"
+                )
+                announcement = s.get(Announcement, evidence.announcement_id)
+                assert announcement is not None
+                assert announcement.company_id == opportunity.company_id, (
+                    f"★ 评分项 {item.rule_id}（规则 {item.rule_id}）的证据 {evidence_id} "
+                    f"属于公司 {announcement.company_id}，而机会属于公司 "
+                    f"{opportunity.company_id}"
+                )
+                checked += 1
+        assert checked > 0
+
+
+def test_condition_evidence_ids_are_evidence_not_events(pipeline_outcome, engine):
+    """条件里的 ``evidence_ids`` 必须是**证据 ID**，不能是事件 ID。
+
+    两者数值范围重叠，所以「查得到」不能证明是对的 ——
+    必须真的把每个 id 拿去 ``Evidence`` 表查，而不是 ``Event`` 表。
+    """
+    from app.strategies.restructuring.rules import STRATEGY
+    from app.pipeline import facts_builder
+
+    with Session(engine) as s:
+        company = s.exec(select(Company).where(Company.name == "ST XXX")).first()
+        assert company is not None
+        facts = facts_builder.build_strategy_facts(s, int(company.id))
+        evaluation = STRATEGY.evaluate(facts)
+
+        referenced: list[int] = []
+        for condition in evaluation.hits:
+            referenced.extend(condition.evidence_ids)
+        assert referenced, "命中的条件必须带证据引用"
+
+        for evidence_id in referenced:
+            assert s.get(Evidence, evidence_id) is not None, (
+                f"条件引用的 {evidence_id} 在 Evidence 表里不存在 —— "
+                "很可能又混进了 Event ID"
+            )
+            evidence = s.get(Evidence, evidence_id)
+            announcement = s.get(Announcement, evidence.announcement_id)
+            assert announcement.company_id == int(company.id)

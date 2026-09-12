@@ -91,6 +91,22 @@ def _best_level(events: tuple[EventFact, ...]) -> ReliabilityLevel | None:
     return min(levels, key=lambda lv: _LEVEL_RANK.index(lv.value))
 
 
+def _evidence_of(events: tuple[EventFact, ...]) -> tuple[int, ...]:
+    """★ 展开事件所绑定的**证据 ID**（去重保序）。
+
+    踩过的坑：这里原来写的是 tuple(e.id for e in events) ——
+    EventFact.id 是**事件 ID**，不是证据 ID。两张表各自自增、数值范围重叠，
+    于是 Opportunity.supporting_evidence_ids 指到了**别的公司**的公告，
+    前端「查看证据 / 跳转原文」逐家错位一格（用户反馈的正是这个）。
+    """
+    seen: list[int] = []
+    for event in events:
+        for evidence_id in event.evidence_ids:
+            if evidence_id not in seen:
+                seen.append(evidence_id)
+    return tuple(seen)
+
+
 def _own_subject_events(events: tuple[EventFact, ...]) -> tuple[EventFact, ...]:
     """只保留**主体是上市公司本身**的事件。
 
@@ -123,7 +139,7 @@ def _condition_c1(facts: StrategyFacts) -> ConditionResult:
         satisfaction, detail = 0.60, "存在重组类事件，但证据等级未知"
     return ConditionResult(
         definition.key, definition.label, definition.weight, satisfaction, detail,
-        tuple(e.id for e in events),
+        _evidence_of(events),
     )
 
 
@@ -133,7 +149,7 @@ def _condition_c2(facts: StrategyFacts) -> ConditionResult:
     events = facts.events_of(EventType.CONTROL_CHANGE)
     if events:
         return ConditionResult(definition.key, definition.label, definition.weight, 1.0,
-                               "披露控制权 / 实际控制人变更", tuple(e.id for e in events))
+                               "披露控制权 / 实际控制人变更", _evidence_of(events))
     sh = facts.shareholder
     if sh.controlling_shareholder_changed or sh.actual_controller_changed:
         return ConditionResult(definition.key, definition.label, definition.weight, 0.80,
@@ -148,7 +164,7 @@ def _condition_c3(facts: StrategyFacts) -> ConditionResult:
     events = facts.events_of(EventType.ASSET_INJECTION)
     if events:
         return ConditionResult(definition.key, definition.label, definition.weight, 1.0,
-                               "存在资产注入 / 置换迹象", tuple(e.id for e in events))
+                               "存在资产注入 / 置换迹象", _evidence_of(events))
     return ConditionResult(definition.key, definition.label, definition.weight, 0.0,
                            "未见资产注入迹象")
 
