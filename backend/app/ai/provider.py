@@ -31,7 +31,10 @@ class LlmRequest:
     timeout_seconds: float = 300.0
     #: 最大输出 token 数。**必须设置** —— 否则模型进入重复生成循环时
     #: 会一直输出到上下文上限，单条可跑几十分钟（实测 21 分钟未结束）。
-    max_output_tokens: int = 900
+    max_output_tokens: int = 2500
+    #: 是否关闭「思考模式」。思考型模型（qwen3 等）的推理 token 也计入输出上限，
+    #: 不关的话上限会被推理吃光、正文一个 token 都轮不到（实测输出长度为 0）。
+    disable_thinking: bool = True
 
 
 @dataclass(frozen=True)
@@ -42,6 +45,10 @@ class LlmResponse:
     latency_ms: int = 0
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
+    #: 是否因**输出长度上限**而截断（Ollama 的 done_reason == "length"）。
+    #: ★ 必须暴露：被截断的 JSON 不完整，会表现为「schema 校验失败」，
+    #: 若只看 schema 错误会误以为是模型能力问题，实际是上限设小了。
+    truncated: bool = False
 
 
 class LlmError(RuntimeError):
@@ -81,6 +88,9 @@ class OllamaProvider:
         }
         if request.expect_json:
             payload["format"] = "json"
+        if request.disable_thinking:
+            # Ollama 0.9+ 支持 think 字段；老的版本会忽略未知字段
+            payload["think"] = False
 
         started = time.monotonic()
         try:
@@ -93,13 +103,19 @@ class OllamaProvider:
 
         latency_ms = int((time.monotonic() - started) * 1000)
         message = data.get("message") or {}
+        content = message.get("content", "") or ""
+        # 防御：某些模型/配置会把结果放进 thinking 字段，content 为空时回退读取。
+        # 不这么做的话，表现为「空输出 → schema 失败」，很难定位。
+        if not content:
+            content = message.get("thinking", "") or ""
         return LlmResponse(
-            text=message.get("content", "") or "",
+            text=content,
             provider=self.name,
             model=model,
             latency_ms=latency_ms,
             prompt_tokens=data.get("prompt_eval_count"),
             completion_tokens=data.get("eval_count"),
+            truncated=data.get("done_reason") == "length",
         )
 
 

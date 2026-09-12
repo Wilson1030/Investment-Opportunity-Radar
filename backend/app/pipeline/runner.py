@@ -543,6 +543,7 @@ def _extract_events(
             max_attempts=settings.llm_max_attempts,
             timeout_seconds=settings.llm_timeout_seconds,
             max_output_tokens=settings.llm_max_output_tokens,
+            disable_thinking=settings.llm_disable_thinking,
         )
         print(f"[llm] 抽取层 {provider_name}/{model} @ {base_url}")
 

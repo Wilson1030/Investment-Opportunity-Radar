@@ -94,7 +94,9 @@ class NodeRunner:
     timeout_seconds: float = 300.0
     ban_word_retries: int = 2
     #: 单次生成的最大输出 token 数（防重复生成循环，见 provider.LlmRequest）
-    max_output_tokens: int = 900
+    max_output_tokens: int = 2500
+    #: 是否关闭思考模式（思考 token 会吃掉输出上限，见 config.llm_disable_thinking）
+    disable_thinking: bool = True
     #: 执行日志（供 pipeline 汇总与测试断言）
     log: list[NodeRunResult] = field(default_factory=list)
 
@@ -124,6 +126,7 @@ class NodeRunner:
             temperature=self.temperature,
             expect_json=True,
             max_output_tokens=self.max_output_tokens,
+            disable_thinking=self.disable_thinking,
             timeout_seconds=self.timeout_seconds,
         )
 
@@ -159,6 +162,7 @@ class NodeRunner:
                         temperature=self.temperature,
                         expect_json=True,
             max_output_tokens=self.max_output_tokens,
+            disable_thinking=self.disable_thinking,
                         timeout_seconds=self.timeout_seconds,
                     )
                     continue
@@ -170,7 +174,17 @@ class NodeRunner:
                 output = node.Output.model_validate(data)
             except (ValueError, ValidationError) as exc:
                 last_status = NodeRunStatus.SCHEMA_ERROR
-                last_error = f"{type(exc).__name__}: {exc}"
+                # ★ 先区分「被输出上限截断」与「模型真的输出错」 ——
+                #   两者都表现为 schema 失败，但处置完全不同：
+                #   截断要调大上限，模型错要换模型/改 prompt。
+                if getattr(response, "truncated", False):
+                    last_error = (
+                        f"输出因长度上限被截断（{len(response.text)} 字符）→ JSON 不完整。"
+                        f"请调大 llm_max_output_tokens（当前 {self.max_output_tokens}）："
+                        f"{type(exc).__name__}: {exc}"
+                    )
+                else:
+                    last_error = f"{type(exc).__name__}: {exc}"
                 # 把错误回灌给模型 —— 这是让本机 4B 模型可用的关键手段
                 request = LlmRequest(
                     prompt=(
@@ -181,6 +195,7 @@ class NodeRunner:
                     temperature=self.temperature,
                     expect_json=True,
             max_output_tokens=self.max_output_tokens,
+            disable_thinking=self.disable_thinking,
                     timeout_seconds=self.timeout_seconds,
                 )
                 continue

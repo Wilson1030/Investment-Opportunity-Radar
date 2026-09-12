@@ -8,7 +8,7 @@ from __future__ import annotations
 
 #: 各节点 prompt 版本。**语义变更时必须递增**，否则旧缓存会被错误复用。
 PROMPT_VERSIONS: dict[str, str] = {
-    "extract_event": "v3",
+    "extract_event": "v4",
     "classify_thesis": "v1",
     "hunt_risk": "v1",
     "analyze": "v1",
@@ -90,6 +90,26 @@ REGULATORY_RISK / LITIGATION / DIVIDEND_POLICY / OTHER
   审核会议日期等）→ event_time_kind = **planned**，event_time 填那个未来日期。
   这是允许的：计划中的事件本来就在未来。
 - 公告没写时间 → event_time = null，event_time_kind = inferred
+
+【affected_thesis 只能用「投资逻辑」词表，不能用「事件类型」词表】
+这两个词表很容易混，必须严格区分：
+
+- affected_thesis（本条事件可能支撑哪些**投资逻辑**）只能取以下 10 个值：
+  restructuring / turnaround / value / growth / event_driven
+  / policy / cycle / product / shareholder_action / ma_integration
+
+- event_type（本条事件**本身**属于哪类事件）用另一套词表，**绝不能**写进 affected_thesis。
+  典型错误：把 control_change、asset_injection、buyback、M&A
+  这类**事件类型**写进 affected_thesis —— 它们不是投资逻辑。
+
+对应关系举例：
+  事件 RESTRUCTURING / CONTROL_CHANGE / ASSET_INJECTION / BANKRUPTCY_REORGANIZATION
+    → affected_thesis 通常含 restructuring（控制权变化也可含 shareholder_action）
+  事件 BUYBACK / SHAREHOLDER_BUY → shareholder_action
+  事件 EARNINGS_TURNAROUND → turnaround
+  事件 M&A → ma_integration
+  事件 POLICY_CATALYST → policy
+  事件 NEW_PRODUCT → product
 
 【其他关键判据】
 1. importance（0~1）：事件对公司基本面的潜在影响强度，与来源是否官方**无关**。

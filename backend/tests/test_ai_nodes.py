@@ -421,8 +421,9 @@ def test_llm_request_has_output_token_cap():
     request = LlmRequest(prompt="x")
     assert request.max_output_tokens > 0, "必须有输出上限，否则可能跑飞"
     assert request.max_output_tokens == settings.llm_max_output_tokens
-    # 抽取的正常输出约 400 token —— 上限要有余量但能兜住跑飞
-    assert 400 < request.max_output_tokens <= 2000
+    # 上限要**足够大**以免截断正常输出，又要**有界**以兜住跑飞。
+    # 900 曾经把 JSON 截断，导致 5/5 抽取全部 schema 失败 —— 教训见 config.py。
+    assert 1500 <= request.max_output_tokens <= 8000
 
 
 def test_ollama_payload_carries_num_predict():
