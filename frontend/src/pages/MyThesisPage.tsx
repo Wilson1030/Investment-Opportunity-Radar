@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import api, { ApiError } from '../api/client'
 import type { MyThesisPayload } from '../api/types'
 import DisclaimerBanner from '../components/DisclaimerBanner'
+import StageBadge from '../components/StageBadge'
 import { StatusBadge } from '../components/StatusBadge'
 
 /**
@@ -72,8 +73,9 @@ export function MyThesisPage() {
                       </span>
                     )}
                   </div>
-                  <div className="mt-1.5">
+                  <div className="mt-1.5 flex items-center gap-2 flex-wrap">
                     <StatusBadge status={item.status} />
+                    <StageBadge stage={item.catalyst_stage} early={item.is_early_signal} />
                   </div>
                 </div>
                 <div className="text-right shrink-0 text-2xs text-faint">

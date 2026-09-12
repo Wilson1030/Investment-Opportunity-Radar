@@ -142,6 +142,40 @@ MOCK_ANNOUNCEMENTS: tuple[MockAnnouncement, ...] = (
             "行业需求出现恢复迹象。公司并非 ST 公司，也未筹划重大资产重组事项。\n"
         ),
     ),
+    # ---- 早期苗头：让「⚑ 早期」这条链路在真实产出里能被看到 ----
+    MockAnnouncement(
+        company_code="000zzz",
+        company_name="ST ZZZ",
+        is_st=True,
+        document_id="MOCK-000zzz-01",
+        title="关于债权人申请对公司进行重整的公告",
+        hours_ago=336,
+        text=(
+            "证券代码：000zzz  证券简称：ST ZZZ  公告编号：2026-031\n"
+            "关于债权人申请对公司进行重整的公告\n"
+            "公司于近日收到债权人 XX 商业银行的《重整申请书》，"
+            "该债权人以公司不能清偿到期债务且明显缺乏清偿能力为由，"
+            "向有管辖权的人民法院申请对公司进行重整。\n"
+            "截至本公告日，法院尚未就是否受理该申请作出裁定。\n"
+        ),
+    ),
+    MockAnnouncement(
+        company_code="000zzz",
+        company_name="ST ZZZ",
+        is_st=True,
+        document_id="MOCK-000zzz-02",
+        title="关于法院裁定受理公司重整申请的公告",
+        hours_ago=30,
+        text=(
+            "证券代码：000zzz  证券简称：ST ZZZ  公告编号：2026-036\n"
+            "关于法院裁定受理公司重整申请的公告\n"
+            "公司于 2026 年 9 月 10 日收到人民法院送达的《民事裁定书》，"
+            "法院裁定受理债权人 XX 商业银行对公司的重整申请，并指定 XX 律师事务所担任管理人。\n"
+            "公司股票自本公告披露之日起被实施退市风险警示。\n"
+            "公司重整计划尚未制定，债权申报与重整投资人遴选工作尚在推进中，"
+            "能否重整成功存在重大不确定性。\n"
+        ),
+    ),
     MockAnnouncement(
         company_code="000yyy",
         company_name="ST YYY",
@@ -175,6 +209,14 @@ MOCK_FINANCIALS: dict[str, tuple[tuple[str, dict[str, tuple[float | None, float 
                    "ocf": (-0.40, None), "gross_margin": (0.19, -0.02)}),
         ("2026H1", {"revenue": (18.0, 0.18), "net_profit": (-0.46, None),
                     "ocf": (0.80, 1.60), "gross_margin": (0.23, 0.04)}),
+    ),
+    "000zzz": (
+        ("2025A", {"revenue": (12.0, -0.30), "net_profit": (-3.60, None),
+                   "ocf": (-1.10, None), "gross_margin": (0.09, -0.06),
+                   "debt_ratio": (0.92, 0.11)}),
+        ("2026H1", {"revenue": (4.8, -0.34), "net_profit": (-2.20, None),
+                    "ocf": (-0.70, None), "gross_margin": (0.07, -0.02),
+                    "debt_ratio": (0.98, 0.06)}),
     ),
     "000yyy": (
         ("2026H1", {"revenue": (5.2, -0.22), "net_profit": (-1.80, None),

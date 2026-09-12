@@ -46,6 +46,17 @@ export function ProfilePage() {
     }
   }
 
+  const saveEarlyToggle = async (enabled: boolean) => {
+    setMessage(null)
+    try {
+      await api.updateProfile({ accept_early_signals: enabled })
+      setProfile((prev) => (prev ? { ...prev, accept_early_signals: enabled } : prev))
+      setMessage(enabled ? '已开启早期苗头信号' : '已关闭早期信号 —— 只看「进展」及之后的机会')
+    } catch (err) {
+      setMessage(err instanceof ApiError ? `${err.code}：${err.message}` : String(err))
+    }
+  }
+
   const parseNl = async () => {
     setNlResult(null)
     try {
@@ -126,6 +137,28 @@ export function ProfilePage() {
               </li>
             ))}
           </ul>
+        </div>
+
+        <div className="hairline" />
+
+        {/* ★ 早期苗头开关：用户要「提前布局」时开；不想看低确定性信号时关 */}
+        <div>
+          <label className="flex items-start gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              className="mt-1 accent-[#2DD4BF]"
+              checked={profile.accept_early_signals ?? true}
+              onChange={(e) => saveEarlyToggle(e.target.checked)}
+            />
+            <span>
+              <span className="text-xs text-text">把「早期苗头」纳入关注范围</span>
+              <span className="block text-2xs text-faint leading-relaxed mt-0.5">
+                包含：预重整 · 债权人申请重整 · 法院受理重整 · 筹划停牌 · 意向协议。
+                开启后这类低确定性信号会出现在 Radar 上（并标注「⚑ 早期」）；
+                关闭则只在机会推进到「进展」阶段后才出现。
+              </span>
+            </span>
+          </label>
         </div>
 
         <div className="hairline" />

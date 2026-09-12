@@ -147,6 +147,10 @@ export interface OpportunityCard {
   a_grade_evidence_count: number
   /** ★ 为 true 时前端强制显示「仅市场讨论，未经证实」 */
   only_market_discussion: boolean
+  /** 催化剂阶段，如「早期｜法院受理 / 指定管理人」（docs/06 的阶梯） */
+  catalyst_stage?: string | null
+  /** ★ 是否为早期苗头：确定性低，必须显式提示，不能当作已确认的催化 */
+  is_early_signal?: boolean
   next_events_to_watch: string[]
   risks?: string[]
   score_version?: string
@@ -200,6 +204,7 @@ export interface RadarPayload {
     name: string
     top_weights: { thesis_type: ThesisType; display_name: string; weight: number }[]
     auto_learn_enabled: boolean
+    accept_early_signals?: boolean
     locked_weights: string[]
   }
   today: {
@@ -260,6 +265,8 @@ export interface ProfilePayload {
   industry_prefs: string[]
   exclusions: string[]
   auto_learn_enabled: boolean
+  /** 是否把「早期苗头」纳入关注范围（预重整 / 重整申请 / 法院受理 / 筹划停牌） */
+  accept_early_signals?: boolean
   locked_weights: string[]
   available_templates: string[]
 }
@@ -292,6 +299,8 @@ export interface MyThesisPayload {
     next_events_to_watch: string[]
     last_updated_at: string
     has_unread_alert: boolean
+    catalyst_stage?: string | null
+    is_early_signal?: boolean
   }[]
   disclaimer?: string
 }

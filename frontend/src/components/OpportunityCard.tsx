@@ -2,6 +2,7 @@ import { Link } from 'react-router-dom'
 import type { OpportunityCard as Card } from '../api/types'
 import DivergenceBadge from './DivergenceBadge'
 import FreshnessTag from './FreshnessTag'
+import StageBadge from './StageBadge'
 import StatusBadge from './StatusBadge'
 
 /**
@@ -37,6 +38,8 @@ export function OpportunityCard({
           </div>
           <div className="mt-1 flex items-center gap-3 flex-wrap">
             <StatusBadge status={card.status} label={card.status_label} />
+            {/* ★ 阶段必须在这里：用户要「提前布局」，就要能一眼分辨苗头与已推进 */}
+            <StageBadge stage={card.catalyst_stage} early={card.is_early_signal} />
             <span className="text-2xs text-faint">
               证据 <span className="num text-muted">{card.evidence_count}</span> 条
               {card.a_grade_evidence_count > 0 && (
@@ -59,6 +62,17 @@ export function OpportunityCard({
           </div>
         </div>
       </header>
+
+      {/* ★ 早期苗头警示：不能让人把苗头当成确定的事（§24 / §38） */}
+      {card.is_early_signal && (
+        <div className="mx-3 mb-2 px-2 py-1 border border-status-pending/50 bg-status-pending/10 rounded-sm text-2xs text-status-pending leading-relaxed">
+          <span className="font-bold">⚑ 早期苗头 · 低确定性</span>
+          <span className="text-muted">
+            　当前处于「{card.catalyst_stage?.split('｜')[1] ?? '早期'}」阶段。
+            这是提前布局用的线索，不是已确认的催化事件 —— 交易可能最终不成立。
+          </span>
+        </div>
+      )}
 
       {/* ★ M4-04：支撑证据里没有 A/B 类 → 强制警示 */}
       {card.only_market_discussion && (

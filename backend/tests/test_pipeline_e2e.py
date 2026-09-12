@@ -43,12 +43,12 @@ def test_pipeline_writes_the_whole_chain(pipeline_outcome, engine):
             "open_questions": len(s.exec(select(OpenQuestion)).all()),
             "alerts": len(s.exec(select(Alert)).all()),
         }
-    assert counts["companies"] == 3
-    assert counts["announcements"] == 6
+    assert counts["companies"] == 4
+    assert counts["announcements"] == 8
     assert counts["paragraphs"] > 10, "全文必须切分成段落（证据定位的前提）"
-    assert counts["events"] == 6, "每条通过预筛的公告都应落库为事件"
-    assert counts["theses"] == 2
-    assert counts["opportunities"] == 2
+    assert counts["events"] == 8, "每条通过预筛的公告都应落库为事件"
+    assert counts["theses"] == 3
+    assert counts["opportunities"] == 3
     assert counts["score_items"] > 20, "每个机会都必须有逐项拆解"
     assert counts["alerts"] == 1, "失效必须产生提醒"
 
@@ -56,10 +56,10 @@ def test_pipeline_writes_the_whole_chain(pipeline_outcome, engine):
 def test_funnel_reports_where_it_dropped(pipeline_outcome):
     report = pipeline_outcome.report
     funnel = report.funnel
-    assert funnel.candidates == 3
-    assert funnel.announcements_fetched == 6
-    assert funnel.events_extracted == 6
-    assert funnel.cards == 2
+    assert funnel.candidates == 4
+    assert funnel.announcements_fetched == 8
+    assert funnel.events_extracted == 8
+    assert funnel.cards == 3
     # 5 事件 → 2 机会：提示应指向这一级，而不是无关的分支计数
     assert funnel.drop_at() == "events_extracted → thesis_candidates"
 
@@ -71,11 +71,12 @@ def _by_thesis_status(outcome):
     return {r.thesis_type: r for r in outcome.opportunities}
 
 
-def test_three_companies_get_three_verdicts(pipeline_outcome):
+def test_four_companies_get_three_verdicts(pipeline_outcome):
+    """四家公司 → 三个结局：健康（待确认）/ 早期苗头（待确认）/ 失效，另加一家被门槛拒绝。"""
     created = [r for r in pipeline_outcome.opportunities if r.created]
     rejected = [r for r in pipeline_outcome.opportunities if not r.created]
 
-    assert len(created) == 2
+    assert len(created) == 3
     assert len(rejected) == 1
     assert "逻辑强度不足" in rejected[0].reason
     assert rejected[0].coverage == pytest.approx(0.11)
@@ -249,6 +250,42 @@ def test_one_off_attribution_reduces_risk_not_fundamentals(pipeline_outcome, eng
     assert raw["risk"] == pytest.approx(29.25)
 
 
+def test_early_signal_case_is_labeled_end_to_end(pipeline_outcome, engine):
+    """★ 用户要求「有苗头的也要找，因为要提前布局」—— 端到端验证。
+
+    ST ZZZ 的公告是「债权人申请重整」+「法院裁定受理重整」，
+    催化强度落在早期档（28 分），因此机会分明显低于「进展」阶段的机会。
+    低分是**刻意**的：它表示确定性低、离价值兑现远 ——
+    但机会本身必须被找到，并且**必须标注为早期**。
+    """
+    early = next(r for r in pipeline_outcome.opportunities if r.created and r.coverage < 0.55)
+    with Session(engine) as s:
+        opportunity = s.get(Opportunity, early.opportunity_id)
+        assert opportunity is not None
+        assert opportunity.is_early_signal is True, "必须标为早期信号"
+        assert "早期" in opportunity.catalyst_stage
+        assert "法院受理" in opportunity.catalyst_stage or "重整申请" in opportunity.catalyst_stage
+        # 处于「待确认」而不是「逻辑成立」
+        assert str(opportunity.status).lower() in {"pending_confirmation", "pendingconfirmation"}
+
+        company = s.get(Company, opportunity.company_id)
+        assert company is not None and company.name == "ST ZZZ"
+
+        # 早期信号必须有证据链支撑（苗头可以低确定性，但不能是空穴来风）
+        assert opportunity.supporting_evidence_ids, "早期信号同样必须有证据"
+        for evidence_id in opportunity.supporting_evidence_ids:
+            evidence = s.get(Evidence, evidence_id)
+            assert evidence is not None
+            assert str(evidence.reliability_level).endswith("A"), "早期信号同样要求 A 类证据"
+
+    # 早期信号的机会分必须低于「进展」阶段那张（确定性差异必须体现在分数上）
+    progressing = next(
+        r for r in pipeline_outcome.opportunities
+        if r.created and not r.invalidated and r.match_score == 69.0
+    )
+    assert early.rule_score < progressing.rule_score
+
+
 # --------------------------------------------------------------------------- #
 # 证据链（规格 §15 / §16）
 # --------------------------------------------------------------------------- #
@@ -383,7 +420,7 @@ def test_rerunning_pipeline_is_idempotent(pipeline_outcome, engine):
         }
     assert before == after, f"重跑后行数变化：{before} → {after}"
     # 机会会被更新（分数/状态），但不得新建
-    assert after["opportunities"] == 2
+    assert after["opportunities"] == 3
 
 
 def test_second_run_does_not_duplicate_alerts(pipeline_outcome, engine):
@@ -445,7 +482,7 @@ def test_run_is_recorded_for_observability(pipeline_outcome, engine):
     with Session(engine) as s:
         run = s.exec(select(IngestRun).order_by(IngestRun.started_at.desc())).first()  # type: ignore[attr-defined]
     assert run is not None
-    assert run.funnel and run.funnel.get("cards") == 2
+    assert run.funnel and run.funnel.get("cards") == 3
     assert run.quality is not None
     assert run.finished_at is not None
 

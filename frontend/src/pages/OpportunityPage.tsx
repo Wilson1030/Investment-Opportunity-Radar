@@ -6,6 +6,7 @@ import DisclaimerBanner from '../components/DisclaimerBanner'
 import EvidenceDrawer from '../components/EvidenceDrawer'
 import ReliabilityTag from '../components/ReliabilityTag'
 import ScoreBreakdown from '../components/ScoreBreakdown'
+import StageBadge from '../components/StageBadge'
 import { StatusBadge } from '../components/StatusBadge'
 import Timeline from '../components/Timeline'
 
@@ -93,8 +94,9 @@ export function OpportunityPage() {
                 <span className="chip text-accent border-accent/40">{card.thesis_display_name}</span>
               )}
             </div>
-            <div className="mt-1.5">
+            <div className="mt-1.5 flex items-center gap-2 flex-wrap">
               <StatusBadge status={card.status} label={card.status_label} />
+              <StageBadge stage={card.catalyst_stage} early={card.is_early_signal} />
             </div>
           </div>
           <div className="text-right shrink-0">
@@ -114,6 +116,19 @@ export function OpportunityPage() {
           </div>
         </div>
       </header>
+
+      {card.is_early_signal && (
+        <div className="panel p-3 border-status-pending/50 bg-status-pending/5">
+          <div className="text-xs text-status-pending font-semibold">⚑ 早期苗头 · 低确定性</div>
+          <p className="mt-1 text-2xs text-muted leading-reading">
+            该机会处于「{card.catalyst_stage?.split('｜')[1] ?? '早期'}」阶段。
+            这类信号的价值在于**提前量**：市场关注度低、可验证信息少，
+            因此确定性显著低于「进展」与「完成」阶段的机会。
+            请以「待确认」的心态阅读，并重点关注下方的失效条件 ——
+            例如法院不受理、申请被撤回、或停牌后终止筹划。
+          </p>
+        </div>
+      )}
 
       {/* ② 为什么重要 —— 投资 Thesis */}
       {thesis && (

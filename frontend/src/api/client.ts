@@ -188,6 +188,7 @@ const FIXTURE_PROFILE: ProfilePayload = {
   industry_prefs: [],
   exclusions: [],
   auto_learn_enabled: true,
+  accept_early_signals: true,
   locked_weights: ['restructuring'],
   available_templates: ['重组猎手', '困境反转', '价值发现', '成长投资', '事件驱动'],
 }

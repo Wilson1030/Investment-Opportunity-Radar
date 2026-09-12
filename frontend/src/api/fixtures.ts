@@ -117,11 +117,101 @@ export const FIXTURE_CARD: OpportunityCard = {
   risk_count: 2,
   a_grade_evidence_count: 2,
   only_market_discussion: false,
-  next_events_to_watch: ['重组方案公告', '交易所问询回复', '资产评估结果', '股东大会', '监管审核'],
+  catalyst_stage: '进展｜草案 + 评估',
+  is_early_signal: false,
+  next_events_to_watch: ['股东大会通过', '监管核准 / 实施完成'],
   risks: ['重组存在失败可能', '公司基本面较弱'],
   score_version: 'rules-1.0+weights-restructuring-1.0',
   first_discovered_at: '2026-09-08T19:40:00Z',
   last_updated_at: '2026-09-11T07:20:00Z',
+}
+
+/**
+ * 早期苗头卡片 —— 用于离线演示「苗头 vs 已推进」的区别。
+ *
+ * 内容对应「债权人申请重整 + 法院裁定受理」，催化强度 28 分（早期档），
+ * 因此机会分明显低于「进展」阶段的机会 —— 这是**刻意**的：
+ * 低分表示确定性低、离价值兑现远，不代表不重要。
+ */
+export const FIXTURE_EARLY_CARD: OpportunityCard = {
+  id: 302,
+  company: { id: 91, name: 'ST ZZZ', code: '000zzz', industry: '基础化工', is_st: true },
+  thesis_type: 'restructuring',
+  thesis_display_name: '重组预期',
+  status: 'pending_confirmation',
+  status_label: '待确认',
+  match_score: 81,
+  rule_score: 41.2,
+  risk_score: 58,
+  semantic_score: null,
+  divergence: null,
+  divergence_flagged: false,
+  why_in_radar: [
+    '法院裁定受理债权人对公司的重整申请',
+    '公司连续两年亏损且净资产为负',
+    '存在预重整阶段已披露的重整投资人',
+  ],
+  summary:
+    '公司已进入司法重整程序，但重整计划尚未制定，债权申报与投资人遴选仍在进行。若重整失败，公司面临终止上市风险。',
+  latest_events: [
+    {
+      id: 601,
+      event_type: 'BANKRUPTCY_REORGANIZATION',
+      event_type_label: '破产重整',
+      title: '关于法院裁定受理公司重整申请的公告',
+      summary: '法院裁定受理债权人对公司的重整申请，并指定管理人。',
+      event_time: '2026-09-10T08:00:00Z',
+      discovery_time: '2026-09-10T08:12:00Z',
+      importance: 0.85,
+      certainty: 0.55,
+      certainty_level: 'disclosed',
+      source_type: 'announcement',
+      source_url: 'http://static.cninfo.com.cn/example-zzz.pdf',
+      affected_thesis: ['restructuring'],
+      evidence_ids: [2001],
+      is_invalidating: false,
+      freshness: 'new',
+      relative_time: '1天前',
+    },
+    {
+      id: 602,
+      event_type: 'BANKRUPTCY_REORGANIZATION',
+      event_type_label: '破产重整',
+      title: '关于债权人申请对公司进行重整的公告',
+      summary: '债权人以公司不能清偿到期债务为由向法院申请重整。',
+      event_time: '2026-08-28T09:30:00Z',
+      discovery_time: '2026-08-28T09:41:00Z',
+      importance: 0.7,
+      certainty: 0.45,
+      certainty_level: 'partially_disclosed',
+      source_type: 'announcement',
+      affected_thesis: ['restructuring'],
+      evidence_ids: [2001],
+      is_invalidating: false,
+      freshness: 'stale',
+      relative_time: '14天前',
+    },
+  ],
+  ai_judgement:
+    '公司已进入司法重整程序，属于早期苗头：程序刚启动，重整计划、债权清偿方案、投资人遴选均未确定。确定性明显低于已披露预案或草案的机会。',
+  evidence_count: 1,
+  contradictory_count: 1,
+  open_question_count: 6,
+  risk_count: 4,
+  a_grade_evidence_count: 1,
+  only_market_discussion: false,
+  catalyst_stage: '早期｜法院受理 / 指定管理人',
+  is_early_signal: true,
+  next_events_to_watch: ['重整计划草案', '债权申报与审核结果', '重整投资人遴选结果', '法院批准重整计划'],
+  risks: [
+    '重整计划未获法院批准 → 转入破产清算',
+    '重整失败导致终止上市',
+    '债权人对清偿方案存在异议',
+    '重整投资人尚未确定',
+  ],
+  score_version: 'rules-1.0+weights-restructuring-1.0',
+  first_discovered_at: '2026-08-28T10:00:00Z',
+  last_updated_at: '2026-09-10T08:20:00Z',
 }
 
 export const FIXTURE_BREAKDOWN: ScoreBreakdown = {
@@ -334,6 +424,7 @@ export const FIXTURE_RADAR: RadarPayload = {
       { thesis_type: 'event_driven', display_name: '事件驱动', weight: 0.1 },
     ],
     auto_learn_enabled: true,
+    accept_early_signals: true,
     locked_weights: ['restructuring'],
   },
   today: {
@@ -342,7 +433,7 @@ export const FIXTURE_RADAR: RadarPayload = {
     calendar_degraded: true,
     calendar_warning: '⚠ 交易日历不可用，已退化为「工作日 = 交易日」。法定节假日将空跑一次调度。',
     new_count: 12,
-    cards: [FIXTURE_CARD],
+    cards: [FIXTURE_CARD, FIXTURE_EARLY_CARD],
   },
   counts: {
     discovered: 5,
@@ -431,6 +522,8 @@ export const FIXTURE_MY_THESIS = {
       next_events_to_watch: ['重组方案公告', '交易所问询回复', '资产评估结果'],
       last_updated_at: '2026-09-11T07:20:00Z',
       has_unread_alert: true,
+      catalyst_stage: '进展｜草案 + 评估',
+      is_early_signal: false,
     },
   ],
   disclaimer: FIXTURE_BREAKDOWN.disclaimer,
