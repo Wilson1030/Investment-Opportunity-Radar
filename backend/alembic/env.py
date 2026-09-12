@@ -13,12 +13,15 @@ from sqlalchemy import engine_from_config, pool
 from sqlmodel import SQLModel
 
 from app.config import settings
+from app.db import resolve_database_url
 
 # 导入全部实体以完成 metadata 注册（autogenerate 依赖它）
 import app.models  # noqa: F401
 
 config = context.config
-config.set_main_option("sqlalchemy.url", settings.database_url)
+# 与应用一致：相对路径按 PROJECT_ROOT 解析，避免「迁移改了另一个库」
+RESOLVED_URL = resolve_database_url(settings.database_url)
+config.set_main_option("sqlalchemy.url", RESOLVED_URL)
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
@@ -28,7 +31,7 @@ target_metadata = SQLModel.metadata
 
 def run_migrations_offline() -> None:
     context.configure(
-        url=settings.database_url,
+        url=RESOLVED_URL,
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},

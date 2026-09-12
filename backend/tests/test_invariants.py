@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -215,3 +217,31 @@ def test_strategy_facts_has_no_db_handle():
     fields = StrategyFacts.__dataclass_fields__
     assert "session" not in fields
     assert not any("session" in name for name in fields)
+
+
+# --------------------------------------------------------------------------- #
+# 数据库路径必须与 CWD 无关
+# --------------------------------------------------------------------------- #
+def test_database_url_is_absolute_and_cwd_independent():
+    """★ 踩过的坑：相对 SQLite 路径按进程 CWD 解析，会静默产生**两个数据库文件**。
+
+    从项目根运行工具、从 backend/ 运行 uvicorn，各自打开一个文件；
+    其中一个还是更早的 ``create_all`` 建的，缺后来的列，
+    于是出现「表结构看起来回退了」这种极难排查的现象。
+    """
+    from app.db import DATABASE_URL, resolve_database_url
+
+    assert DATABASE_URL.startswith("sqlite:///")
+    db_path = Path(DATABASE_URL.split("sqlite:///", 1)[-1])
+    assert db_path.is_absolute(), "数据库路径必须是绝对路径"
+    assert db_path.parent.exists()
+
+    # 同一个相对 URL 必须解析成同一个绝对路径（不依赖 CWD）
+    assert resolve_database_url("sqlite:///./data/radar.db") == resolve_database_url(
+        "sqlite:///./data/radar.db"
+    )
+    # 非 SQLite 与非相对路径不受影响
+    assert resolve_database_url("postgresql://u@h/db") == "postgresql://u@h/db"
+    assert resolve_database_url("sqlite:///:memory:") == "sqlite:///:memory:"
+    abs_url = f"sqlite:///{db_path.as_posix()}"
+    assert resolve_database_url(abs_url) == abs_url

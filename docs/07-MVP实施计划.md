@@ -552,11 +552,41 @@ RESTRUCTURING_NEGATIVE_KEYWORDS = ("限售股", "限售股份", "解除限售", 
 验证（11 个正反例全绿）：失效路径催化归零、推进中与重整**成功**的公告不误判、
 预警只提醒不判死、事件层标签不烤进有条件规则。
 
+##### 途中挖出的第三个 bug：数据库路径依赖 CWD（会静默产生两个库）
+
+跑「重整」抽样时直接报错：
+
+```
+sqlite3.OperationalError: no such column: investmentprofile.accept_early_signals
+```
+
+排查发现 **同一个项目有两个数据库文件**：
+
+| 路径 | 表数 | 有无新列 | 谁在用 |
+|---|:---:|:---:|---|
+| `backend/data/radar.db` | 27 | ✅ | uvicorn（CWD=backend）、reset_db |
+| `data/radar.db` | 26 | ❌ | 从项目根运行的工具（sampling_review 等） |
+
+**根因**：`sqlite:///./data/radar.db` 是相对路径，SQLAlchemy 按**进程 CWD** 解析。
+于是「你在哪个目录运行」决定了用哪个库。
+
+**为什么危险**：其中一个文件是更早的 `create_all` 建的（`create_all` 不会 ALTER 已存在的表），
+所以缺后来的列 —— 表现为「表结构看起来回退了」这种极难排查的现象，
+而且数据被静默劈成两份（一边写一边读不到）。
+
+**修法**：`app/db.py` 新增 `resolve_database_url()`，把相对 SQLite 路径统一按
+`PROJECT_ROOT` 解析为绝对路径；`alembic/env.py` 复用同一个函数，
+保证「迁移改的库 = 应用连的库」。加了回归测试断言路径为绝对且与 CWD 无关。
+
+清掉两个残留库后重建，现在只有 `PROJECT_ROOT/data/radar.db` 一个，
+与 `settings.data_dir`（mock / cache / raw 的所在）一致。
+
 ##### 待办
 
 - [x] 前端 `OpportunityCard` 渲染 `catalyst_stage`（已完成，见 §5.2.5）
 - [x] 早期信号的失效条件（已完成，见上）
-- [ ] 用含早期信号的样本再抽一次，确认识别正确率（现在只有手工构造的用例，无真实数据验证）
+- [x] 数据库路径与 CWD 解耦（已完成，见上）
+- [ ] 用含早期信号的样本再抽一次，确认识别正确率（进行中）
 
 ##### 本环境的一个硬约束（影响候选池方案）
 

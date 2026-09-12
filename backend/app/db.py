@@ -14,8 +14,30 @@ from sqlmodel import Session, SQLModel, create_engine
 
 from app.config import PROJECT_ROOT, settings
 
-_connect_args = {"check_same_thread": False} if settings.database_url.startswith("sqlite") else {}
-engine = create_engine(settings.database_url, echo=False, connect_args=_connect_args)
+def resolve_database_url(url: str) -> str:
+    """把**相对** SQLite 路径解析为绝对路径。
+
+    ★ 踩过的坑：``sqlite:///./data/radar.db`` 是相对路径，SQLAlchemy 按**进程 CWD**
+    解析。于是从项目根运行工具、从 ``backend/`` 运行 uvicorn，各自打开了一个
+    不同的数据库文件 —— 数据被静默劈成两份，还会出现「表结构看起来回退了」
+    （因为其中一个文件是更早的 ``create_all`` 建的，缺后来的列）。
+
+    现在统一相对于 ``PROJECT_ROOT`` 解析，与 CWD 无关。
+    """
+    if not url.startswith("sqlite"):
+        return url
+    _, _, raw = url.partition("sqlite:///")
+    if not raw or raw.startswith(":memory:"):
+        return url
+    path = Path(raw)
+    if path.is_absolute():
+        return url
+    return f"sqlite:///{(PROJECT_ROOT / raw.lstrip('./')).as_posix()}"
+
+
+DATABASE_URL = resolve_database_url(settings.database_url)
+_connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
+engine = create_engine(DATABASE_URL, echo=False, connect_args=_connect_args)
 
 
 @event.listens_for(Engine, "connect")
@@ -31,14 +53,9 @@ def _set_sqlite_pragma(dbapi_connection, _connection_record) -> None:
 
 
 def _ensure_sqlite_parent() -> None:
-    url = settings.database_url
-    if not url.startswith("sqlite"):
+    if not DATABASE_URL.startswith("sqlite"):
         return
-    raw = url.split("sqlite:///", 1)[-1]
-    path = Path(raw)
-    if not path.is_absolute():
-        path = PROJECT_ROOT / raw.lstrip("./")
-    path.parent.mkdir(parents=True, exist_ok=True)
+    Path(DATABASE_URL.split("sqlite:///", 1)[-1]).parent.mkdir(parents=True, exist_ok=True)
 
 
 def init_db() -> None:
