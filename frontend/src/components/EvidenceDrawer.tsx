@@ -36,8 +36,10 @@ export function EvidenceDrawer({
         <header className="sticky top-0 flex items-center justify-between px-4 py-3 bg-panel border-b border-border">
           <div>
             <div className="text-sm font-semibold">证据链</div>
-            <div className="text-2xs text-faint">
-              每条证据都可定位到原文段落（page / para_index）—— 无法核对的判断不应被当成事实
+            <div className="text-2xs text-faint leading-relaxed">
+              每条证据都可定位到原文段落。
+              「跳转原文」会带上页码锚点直接跳到那一页；
+              若 PDF 页面没跳，用「复制片段」在文档里 Ctrl+F 精确定位。
             </div>
           </div>
           <button type="button" className="btn" onClick={onClose}>
@@ -69,24 +71,40 @@ export function EvidenceDrawer({
                 {item.relevant_text}
               </blockquote>
 
-              <div className="flex items-center gap-3 text-2xs text-faint">
+              <div className="flex items-center gap-3 text-2xs text-faint flex-wrap">
                 {item.page !== null && item.page !== undefined && (
-                  <span className="num">
+                  <span className="num text-muted">
                     第 {item.page} 页 第 {item.para_index} 段
                   </span>
                 )}
                 {item.document_id && <span className="num">{item.document_id}</span>}
-                <span className="num">
-                  抽取信心 {(item.confidence * 100).toFixed(0)}%
-                </span>
+                <span className="num">抽取信心 {(item.confidence * 100).toFixed(0)}%</span>
+
+                {/* ★ 用带页码锚点的深链：不加锚点只会停在 PDF 第 1 页 */}
                 <a
                   className="text-accent/80 hover:text-accent"
-                  href={item.source_url}
+                  href={item.source_deep_link || item.source_url}
                   target="_blank"
                   rel="noreferrer"
+                  title={
+                    item.page
+                      ? `在新标签打开 PDF 并跳到第 ${item.page} 页（浏览器 PDF 阅读器支持 #page 锚点）`
+                      : '在新标签打开原文'
+                  }
                 >
-                  跳转原文 ↗
+                  跳转原文 {item.page ? `（第 ${item.page} 页）` : ''} ↗
                 </a>
+
+                <button
+                  type="button"
+                  className="text-accent/80 hover:text-accent"
+                  onClick={() => {
+                    void navigator.clipboard?.writeText(item.relevant_text)
+                  }}
+                  title="复制这段原文，可在 PDF 里 Ctrl+F 精确定位"
+                >
+                  复制片段（用于 Ctrl+F）
+                </button>
               </div>
 
               {item.extracted_facts.length > 0 && (

@@ -420,3 +420,57 @@ def test_admin_runs_and_llm_runs_are_exposed(client):
 
 def test_admin_run_errors_404(client):
     assert client.get("/api/admin/runs/12345/errors").status_code == 404
+
+
+# --------------------------------------------------------------------------- #
+# 证据的「跳转原文」必须带页码锚点
+# --------------------------------------------------------------------------- #
+def test_evidence_deep_link_contains_page_anchor(client, seeded):
+    """★ 实测反馈：「跳转原文」跳的都是错的。
+
+    排查后确认：链接指向的**文档是对的**（HTTP 200、有效 PDF），
+    但**没有页码锚点** —— 点进去永远停在 PDF 第 1 页。
+    而重整/重组公告动辄几十上百页，用户在文档里根本找不到被引用那句话，
+    「跳转原文」等于失效。
+    """
+    evidence = client.get(
+        f"/api/opportunities/{seeded['opportunity_id']}/evidence"
+    ).json()["data"]["supporting"]
+
+    assert evidence, "该机会应有支撑证据"
+    item = evidence[0]
+    assert item["source_url"], "必须有原始链接"
+    assert item["source_deep_link"], "必须提供带锚点的深链"
+    assert item["page"] is not None
+
+    assert item["source_deep_link"].endswith(f"#page={item['page']}"), (
+        f"深链必须带页码锚点：{item['source_deep_link']}"
+    )
+    assert item["source_deep_link"].startswith(item["source_url"]), (
+        "深链必须由原始链接派生，不能是另一个地址"
+    )
+    # 页码与段号都要能展示，方便用户手动核对
+    assert item["para_index"] is not None
+
+
+def test_deep_link_degrades_safely():
+    """缺页码或 URL 已含锚点时必须原样返回，不能拼出坏链接。"""
+    from app.api.serializers import deep_link
+
+    class _Fake:
+        source_url = "http://x/a.pdf"
+        page = None
+
+    assert deep_link(_Fake()) == "http://x/a.pdf"
+
+    class _FakeWithAnchor:
+        source_url = "http://x/a.pdf#page=3"
+        page = 5
+
+    assert deep_link(_FakeWithAnchor()) == "http://x/a.pdf#page=3"
+
+    class _NoUrl:
+        source_url = ""
+        page = 2
+
+    assert deep_link(_NoUrl()) == ""

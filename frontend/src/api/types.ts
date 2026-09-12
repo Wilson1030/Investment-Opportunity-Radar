@@ -74,6 +74,9 @@ export interface Evidence {
   source_type: string
   source_name: string
   source_url: string
+  /** ★ 带页码锚点的深链（如 ...PDF#page=14）——「跳转原文」必须用它，
+   *  否则只会停在 PDF 第 1 页，几十页的公告里根本找不到被引用的那句 */
+  source_deep_link?: string
   publication_time: string
   reliability_level: ReliabilityLevel
   reliability_note: string

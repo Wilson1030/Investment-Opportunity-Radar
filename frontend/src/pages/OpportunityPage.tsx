@@ -207,6 +207,18 @@ export function OpportunityPage() {
                 <ReliabilityTag level={item.reliability_level} showNote />
                 <span className="text-xs text-muted">{item.source_name}</span>
                 <span className="num text-2xs text-faint">{item.publication_time.slice(0, 10)}</span>
+                {/* ★ 带页码锚点的深链 —— 不加锚点只会停在 PDF 第 1 页 */}
+                {item.page !== null && item.page !== undefined && (
+                  <a
+                    className="num text-2xs text-accent/80 hover:text-accent"
+                    href={item.source_deep_link || item.source_url}
+                    target="_blank"
+                    rel="noreferrer"
+                    title={`打开原文并跳到第 ${item.page} 页`}
+                  >
+                    第 {item.page} 页 第 {item.para_index} 段 ↗
+                  </a>
+                )}
               </div>
               <blockquote className="text-2xs text-muted leading-reading border-l-2 border-border-strong pl-3">
                 {item.relevant_text}

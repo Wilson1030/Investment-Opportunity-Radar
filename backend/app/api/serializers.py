@@ -125,6 +125,21 @@ def event_brief(event: Event) -> dict:
     }
 
 
+def deep_link(evidence: Evidence) -> str:
+    """带**页码锚点**的原文链接。
+
+    ★ 不加锚点的话，点击只会停在 PDF 第 1 页 —— 而 cninfo 的重整/重组公告
+    动辄几十上百页，用户在文档里根本找不到被引用的那句话，
+    「跳转原文」就等于失效（实测反馈：跳转都是错的）。
+
+    浏览器 PDF 阅读器（Chrome / Edge / Firefox）都支持 #page=N。
+    """
+    url = evidence.source_url or ""
+    if not url or not evidence.page or "#" in url:
+        return url
+    return f"{url}#page={int(evidence.page)}"
+
+
 def evidence_detail(evidence: Evidence) -> dict:
     age = _age_days(evidence.publication_time)
     return {
@@ -132,6 +147,8 @@ def evidence_detail(evidence: Evidence) -> dict:
         "source_type": _v(evidence.source_type),
         "source_name": evidence.source_name,
         "source_url": evidence.source_url,
+        #: 可直接打开的深链（含页码锚点）—— 前端应优先用它
+        "source_deep_link": deep_link(evidence),
         "publication_time": evidence.publication_time.isoformat(),
         "reliability_level": _v(evidence.reliability_level),
         "reliability_note": RELIABILITY_NOTES.get(evidence.reliability_level, ""),
