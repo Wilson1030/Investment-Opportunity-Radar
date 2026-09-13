@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import pytest
 
+from app.models.enums import ThesisType
+
 REQUIRED_CARD_FIELDS = {
     "id", "company", "thesis_type", "thesis_display_name", "status", "status_label",
     "match_score", "rule_score", "risk_score", "semantic_score", "divergence",
@@ -37,8 +39,16 @@ def test_health_reports_selfcheck_and_degradation(client):
     assert data["status"] in {"ok", "degraded"}
     assert data["db"] == "ok"
     assert data["registry_problems"] == []
-    assert data["strategies"]["implemented"] == ["restructuring"]
-    assert len(data["strategies"]["designed"]) == 9
+    # ★ 不写死「谁被实现了」—— 那会让每实现一个策略都要改测试。
+    #   这里守的是**两个来源必须一致**：health 报告的名单 == registry 的声明。
+    from app.strategies import implemented_types, designed_types
+
+    assert data["strategies"]["implemented"] == sorted(
+        c.value for c in implemented_types()
+    ), "health 报告的已实现策略与 registry 不一致"
+    assert len(data["strategies"]["designed"]) == len(designed_types())
+    assert ThesisType.RESTRUCTURING.value in data["strategies"]["implemented"]
+    assert ThesisType.TURNAROUND.value in data["strategies"]["implemented"]
     assert data["llm"]["mode"] == "dev"
     assert data["ingest"]["dry_run"] is True
     # 交易日历不可用时必须显式告警（R5）
@@ -324,11 +334,14 @@ def test_strategies_endpoint_design_then_implement(client):
     data = client.get("/api/strategies").json()["data"]
     assert len(data) == 10
     by_code = {s["code"]: s for s in data}
+    from app.strategies import implemented_types
+
+    expected_implemented = {c.value for c in implemented_types()}
+    assert {c for c, s in by_code.items() if s["status"] == "implemented"} == (
+        expected_implemented
+    ), "接口报的实现状态与 registry 不一致"
     assert by_code["restructuring"]["status"] == "implemented"
-    assert all(
-        by_code[c]["status"] == "designed"
-        for c in by_code if c != "restructuring"
-    )
+    assert by_code["turnaround"]["status"] == "implemented"
     for strategy in data:
         assert strategy["invalidating_event_types"], f"{strategy['code']} 缺少失效条件"
         assert strategy["anti_patterns"], f"{strategy['code']} 缺少反例警示"

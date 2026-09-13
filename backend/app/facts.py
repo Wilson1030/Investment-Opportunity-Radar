@@ -67,6 +67,29 @@ class FinancialFacts:
     #: 现金流数据是否为「每股经营现金流」代理（真实总额不可得时）
     ocf_is_proxy: bool = False
 
+    # ---- 以下为 turnaround（困境反转）所需：**方向的变化**，而非当前状态 ----
+    #:
+    #: ★ 为什么不能复用 ``*_improving_quarters`` 反推：一家最近在改善的公司
+    #: ``revenue_improving_quarters`` > 0，但那说明不了「过去有没有恶化」——
+    #: 困境反转要同时成立「**先恶化**」与「**后改善**」两个方向相反的事实。
+
+    #: 史上最长连续「营收同比下降」期数（回答 C1「过去有明确经营恶化」）
+    revenue_declining_run_max: int = 0
+    #: 史上最长连续「毛利率同比下降」期数
+    margin_declining_run_max: int = 0
+    #: 史上最长连续「净利润为负」期数
+    loss_run_max: int = 0
+
+    #: 最近连续「营收同比下降」期数（诊断用：>0 表示改善尚未发生）
+    revenue_declining_quarters: int = 0
+    #: 最近连续「毛利率同比下降」期数
+    margin_declining_quarters: int = 0
+
+    #: 最新一期经营现金流转正，**且上一期不为正** —— 真正的「转折点」
+    ocf_turned_positive: bool = False
+    #: 有财务数据的期数（判断「≥2 期」时必须有依据，不能凭空断言）
+    periods_with_data: int = 0
+
 
 @dataclass(frozen=True)
 class ShareholderFacts:

@@ -113,10 +113,20 @@ def test_example_j_carries_all_improvement_signals():
     assert EventType.MANAGEMENT_CHANGE in types
 
 
-def test_example_j_turnaround_is_designed_but_not_implemented():
-    """诚实标注：turnaround 的设计已完整，但实现排在 P10 第 2 位。"""
+def test_example_j_turnaround_is_implemented_and_follows_the_gate_order():
+    """示例 J 落地后，这条守它**真正的验收闸门**（docs/06 §16）。
+
+    原文是「turnaround 的设计已完整，但实现排在 P10 第 2 位」——
+    那是当时的**进度标注**，不是约束。实现完之后该守的是：
+    **策略与 ST 标签解耦**（示例 J 的原话：
+    「投资策略应该决定股票为什么被发现，而不是股票标签决定投资策略」）。
+
+    它在 ``tests/test_turnaround_strategy.py`` 里有完整验证，这里只做
+    「已实现 + 走的是实现类而不是占位」的入口确认。
+    """
     implementation = get_strategy(ThesisType.TURNAROUND)
-    assert isinstance(implementation, NotImplementedStrategy)
+    assert not isinstance(implementation, NotImplementedStrategy)
+    assert implementation.code is ThesisType.TURNAROUND
 
 
 # --------------------------------------------------------------------------- #

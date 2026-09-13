@@ -39,8 +39,10 @@ def _register_implementations() -> None:
     if _IMPLEMENTATIONS:
         return
     from app.strategies.restructuring.rules import STRATEGY as restructuring_strategy
+    from app.strategies.turnaround.rules import STRATEGY as turnaround_strategy
 
     _IMPLEMENTATIONS[ThesisType.RESTRUCTURING] = restructuring_strategy
+    _IMPLEMENTATIONS[ThesisType.TURNAROUND] = turnaround_strategy
 
 
 def get_strategy(thesis_type: ThesisType | str) -> object:
@@ -71,7 +73,12 @@ def validate_registry() -> list[str]:
     检查项（对应 INV-TT1 / INV-TT2 / docs/04 §3）::
 
     1. 每个策略的失效条件非空（规格 §58 原则 5）
-    2. status=implemented 的策略必须有实现类（INV-TT2）
+    2. status=implemented 的策略必须有实现类（INV-TT2），
+       **且反过来**：有实现类的策略 status 必须是 implemented
+       —— 只查单向会留下「已实现但声明为 designed」的漂移，
+       表现为 ``implemented_types()`` 与 ``implementation_status()`` 互相矛盾
+       （实现 turnaround 时实测踩到：它跑得起来，
+       却不在 ``implemented_types()`` 里，于是机会生成根本不遍历它）
     3. 正向权重合计 = 0.95，且风险不在正向权重表内
     4. 核心条件权重合计 = 1.0
     5. 风险因素权重合计 = 1.0
@@ -82,6 +89,23 @@ def validate_registry() -> list[str]:
 
     problems: list[str] = []
     _register_implementations()
+
+    # 2b. 反向校验：有实现类就必须声明为 implemented。
+    #     只查单向会留下「跑得起来但不在 implemented_types() 里」的策略 ——
+    #     那种策略**静默不参与机会生成**，是最难发现的一类失效。
+    for code in _IMPLEMENTATIONS:
+        if STRATEGIES[code].status is not StrategyStatus.IMPLEMENTED:
+            problems.append(
+                f"[{STRATEGIES[code].display_name}] 已有实现类，"
+                f"但 registry 里 status={STRATEGIES[code].status.value} —— "
+                f"implemented_types() 不会遍历它，机会生成会静默跳过"
+            )
+    for code, definition in STRATEGIES.items():
+        if (definition.status is StrategyStatus.IMPLEMENTED
+                and code not in _IMPLEMENTATIONS):
+            problems.append(
+                f"[{definition.display_name}] 声明为 implemented 但没有实现类（INV-TT2）"
+            )
 
     for code, definition in STRATEGIES.items():
         name = definition.display_name

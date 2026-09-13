@@ -73,14 +73,39 @@ def _by_thesis_status(outcome):
 
 
 def test_four_companies_get_three_verdicts(pipeline_outcome):
-    """四家公司 → 三个结局：健康（待确认）/ 早期苗头（待确认）/ 失效，另加一家被门槛拒绝。"""
-    created = [r for r in pipeline_outcome.opportunities if r.created]
-    rejected = [r for r in pipeline_outcome.opportunities if not r.created]
+    """四家公司 → 三个结局：健康（待确认）/ 早期苗头（待确认）/ 失效，另加一家被门槛拒绝。
+
+    ★ 实现第 2 个策略（turnaround）后，结果从「每家公司 1 条」变成
+    「每个 (公司, 策略) 1 条」。所以这里先按策略分组再断言 ——
+    直接数总数的话，断言会因为「多了一个策略」而失效，
+    而它真正要守的（重组策略上的三种结局）其实没变。
+    """
+    restructuring = [
+        r for r in pipeline_outcome.opportunities if r.thesis_type == "restructuring"
+    ]
+    created = [r for r in restructuring if r.created]
+    rejected = [r for r in restructuring if not r.created]
 
     assert len(created) == 3
     assert len(rejected) == 1
     assert "逻辑强度不足" in rejected[0].reason
     assert rejected[0].coverage == pytest.approx(0.11)
+
+
+def test_pipeline_evaluates_every_implemented_strategy(pipeline_outcome):
+    """★ 每个已实现的策略都必须被遍历到。
+
+    为什么值得单独一条：实现 turnaround 时实测踩到 ——
+    实现类能跑，但 registry 里的 status 还写着 ``DESIGNED``，
+    于是 ``implemented_types()`` 不遍历它，机会生成**静默跳过**。
+    没有报错、没有空卡，只是它永远不出现在雷达上。
+    """
+    from app.strategies import implemented_types
+
+    expected = {code.value for code in implemented_types()}
+    evaluated = {r.thesis_type for r in pipeline_outcome.opportunities}
+    assert expected <= evaluated, f"这些策略没有被遍历：{expected - evaluated}"
+    assert expected == {"restructuring", "turnaround"}
 
 
 def test_healthy_case_is_pending_confirmation(pipeline_outcome):

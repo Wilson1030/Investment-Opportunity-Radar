@@ -182,6 +182,32 @@ def _trailing_count(
     return count
 
 
+def _max_run(
+    series: list[tuple[datetime, float | None, float | None]],
+    predicate,
+    *,
+    use_yoy: bool = False,
+) -> int:
+    """序列中**史上最长**的连续满足期数。
+
+    ★ 为什么需要它（而不只是 ``_trailing_count``）：
+    ``turnaround`` 的 C1 问的是「**过去**有没有明确恶化」，
+    而 C2 问「**最近**有没有改善」—— 两者方向相反、必须能同时成立。
+    只看「从最新往回连续」的话，一家正在改善的公司算出来是 0，
+    会把它的历史恶化完全抹掉（而历史恶化恰恰是反转的前提）。
+    """
+    best = 0
+    current = 0
+    for _, value, yoy in series:
+        subject = yoy if use_yoy else value
+        if subject is not None and predicate(subject):
+            current += 1
+            best = max(best, current)
+        else:
+            current = 0
+    return best
+
+
 def build_financial_facts(session: Session, company_id: int) -> FinancialFacts:
     """从结构化财务指标推导趋势。
 
@@ -229,7 +255,25 @@ def build_financial_facts(session: Session, company_id: int) -> FinancialFacts:
             attributed = True
             break
 
+    # ---- 方向类事实（turnaround 用）----
+    # 「过去是否有明确恶化」要看**史上最长连续下降**，而不是「最近是否在下降」
+    revenue_declining_run_max = _max_run(revenue, lambda v: v < 0, use_yoy=True)
+    margin_declining_run_max = _max_run(margin, lambda v: v < 0, use_yoy=True)
+    loss_run_max = _max_run(net_profit, lambda v: v < 0)
+
+    # 经营现金流的「转折点」：最新为正、上一期不为正
+    ocf_turned_positive = False
+    if len(ocf) >= 2 and ocf[-1][1] is not None and ocf[-2][1] is not None:
+        ocf_turned_positive = ocf[-1][1] > 0 >= ocf[-2][1]
+
     return FinancialFacts(
+        revenue_declining_run_max=revenue_declining_run_max,
+        margin_declining_run_max=margin_declining_run_max,
+        loss_run_max=loss_run_max,
+        revenue_declining_quarters=_trailing_count(revenue, lambda v: v < 0, use_yoy=True),
+        margin_declining_quarters=_trailing_count(margin, lambda v: v < 0, use_yoy=True),
+        ocf_turned_positive=ocf_turned_positive,
+        periods_with_data=max(len(net_profit), len(revenue), len(margin)),
         loss_years=_trailing_count(net_profit, lambda v: v < 0),
         revenue_improving_quarters=_trailing_count(revenue, lambda v: v > 0, use_yoy=True),
         margin_improving_quarters=_trailing_count(margin, lambda v: v > 0, use_yoy=True),
