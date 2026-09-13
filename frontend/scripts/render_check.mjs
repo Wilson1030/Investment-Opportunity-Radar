@@ -20,6 +20,7 @@ const src = resolve(here, '..', 'src').replace(/\\/g, '/')
 const entry = `
 import { renderToStaticMarkup } from 'react-dom/server'
 import { FinancialsPanel } from '${src}/components/FinancialsPanel'
+import { AiJudgement } from '${src}/components/AiJudgement'
 import { FIXTURE_DETAIL } from '${src}/api/fixtures'
 
 export const html = renderToStaticMarkup(
@@ -29,6 +30,27 @@ export const html = renderToStaticMarkup(
   }),
 )
 export const empty = renderToStaticMarkup(FinancialsPanel({ financials: [], signals: [] }))
+
+// AI 判断区块：有内容 / 空内容两种
+const aiCard = FIXTURE_DETAIL.card
+export const ai = renderToStaticMarkup(
+  AiJudgement({
+    summary: aiCard.ai_judgement,
+    ruleScore: aiCard.rule_score,
+    semanticScore: aiCard.semantic_score,
+    divergence: aiCard.divergence,
+    divergenceFlagged: aiCard.divergence_flagged,
+  }),
+)
+export const aiEmpty = renderToStaticMarkup(
+  AiJudgement({
+    summary: null,
+    ruleScore: 0,
+    semanticScore: null,
+    divergence: null,
+    divergenceFlagged: false,
+  }),
+)
 `
 
 const dir = mkdtempSync(join(tmpdir(), 'radar-render-'))
@@ -53,6 +75,8 @@ await build({
 const mod = createRequire(import.meta.url)(outFile)
 const html = mod.html
 const empty = mod.empty
+const ai = mod.ai
+const aiEmpty = mod.aiEmpty
 
 /** 断言表：字符串必须在渲染结果里出现（或必须不出现） */
 const must = [
@@ -102,6 +126,22 @@ if (!empty.includes('未采集到结构化财务数据')) {
 if (empty.includes('亿元')) {
   console.error('  ✗ 空数据下仍显示了金额 —— 疑似用 0 填充')
   failed += 1
+}
+
+// ②b AI 判断区块：模型叙事必须出现在页面上，空值时必须明说「待生成」
+// 注意：组件本身不含「AI 判断」标题（那是父级区块的 label），
+// 所以这里断言的是**叙事文本**与**语义分徽标**。
+if (!ai.includes('重组预期策略') || !ai.includes('语义分')) {
+  console.error('  ✗ AI 判断区块没有渲染出叙事或语义分徽标')
+  failed += 1
+} else {
+  console.log('  ✓ AI 判断区块（叙事 + 语义分徽标）')
+}
+if (!aiEmpty.includes('待生成')) {
+  console.error('  ✗ AI 叙事为空时没有提示「待生成」')
+  failed += 1
+} else {
+  console.log('  ✓ AI 叙事为空时明说待生成（不用占位文案填充）')
 }
 
 // ③ 全项目扫「JSX 文本里的字面 **」—— Markdown 粗体在 JSX 里不会生效，

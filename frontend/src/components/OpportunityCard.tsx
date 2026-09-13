@@ -1,6 +1,6 @@
 import { Link } from 'react-router-dom'
 import type { OpportunityCard as Card } from '../api/types'
-import DivergenceBadge from './DivergenceBadge'
+import AiJudgement from './AiJudgement'
 import FreshnessTag from './FreshnessTag'
 import StageBadge from './StageBadge'
 import StatusBadge from './StatusBadge'
@@ -119,23 +119,19 @@ export function OpportunityCard({
         </>
       )}
 
-      {/* AI 判断 */}
+      {/* AI 判断（与详情页共用同一个组件，避免两处漂移） */}
       {card.ai_judgement && (
         <>
           <div className="hairline mx-3" />
           <section className="p-3">
             <div className="label mb-1.5">AI 判断</div>
-            <p className="text-xs text-muted leading-reading border-l-2 border-border-strong pl-3">
-              {card.ai_judgement}
-            </p>
-            <div className="mt-2">
-              <DivergenceBadge
-                ruleScore={card.rule_score}
-                semanticScore={card.semantic_score}
-                divergence={card.divergence}
-                flagged={card.divergence_flagged}
-              />
-            </div>
+            <AiJudgement
+              summary={card.ai_judgement}
+              ruleScore={card.rule_score}
+              semanticScore={card.semantic_score}
+              divergence={card.divergence}
+              divergenceFlagged={card.divergence_flagged}
+            />
           </section>
         </>
       )}

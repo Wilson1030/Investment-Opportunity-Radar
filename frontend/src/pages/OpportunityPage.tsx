@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import api, { ApiError } from '../api/client'
 import type { Evidence, OpportunityDetail, ScoreBreakdown as Breakdown } from '../api/types'
+import AiJudgement from '../components/AiJudgement'
 import DisclaimerBanner from '../components/DisclaimerBanner'
 import EvidenceDrawer from '../components/EvidenceDrawer'
 import FinancialsPanel from '../components/FinancialsPanel'
@@ -178,6 +179,23 @@ export function OpportunityPage() {
           </div>
         </section>
       )}
+
+      {/* ②b AI 判断 —— 规格 §44：AI 负责解释，不替用户决策 */}
+      <section className="panel p-3 space-y-2">
+        <div className="flex items-baseline justify-between">
+          <div className="label">AI 判断</div>
+          <span className="text-2xs text-faint">
+            由模型生成（可出错）—— 与上面的投资 Thesis 分开呈现，便于分辨哪句可核对
+          </span>
+        </div>
+        <AiJudgement
+          summary={detail.card.ai_judgement}
+          ruleScore={detail.card.rule_score}
+          semanticScore={detail.card.semantic_score}
+          divergence={detail.card.divergence}
+          divergenceFlagged={detail.card.divergence_flagged}
+        />
+      </section>
 
       {/* ③ 为什么与我有关 —— 评分拆解 */}
       {breakdown && (
