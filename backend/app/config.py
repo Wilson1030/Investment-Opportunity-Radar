@@ -54,6 +54,10 @@ class Settings(BaseSettings):
 
     # ---------- 数据库 ----------
     database_url: str = "sqlite:///./data/radar.db"
+    #: LLM 节点缓存库（**独立于业务库**）。留空则用 ``data/llm_cache.db``。
+    #:
+    #: 分开的原因：清业务库不该连带丢掉缓存（缓存的价值就是「清库重跑不用重算」）。
+    llm_cache_url: str = ""
 
     # ---------- 采集范围（D11：改这一行即可放宽到全市场）----------
     ingest_scope: str = "st_and_risk_warning"   # st_and_risk_warning | all_a_shares

@@ -91,16 +91,24 @@ def llm_runs(
     node: str | None = Query(default=None),
     status: str | None = Query(default=None),
     limit: int = 50,
-    session: Session = Depends(get_session),
 ) -> dict:
+    """节点执行审计 / 缓存记录。
+
+    ★ 读的是**缓存库**（独立文件），不是业务库 —— 表在那边（见 ``app/db.py``）。
+    分开之后清业务库不会连带丢掉缓存，代价就是这个接口要显式切库。
+    """
+    from app.db import cache_engine, ensure_cache_tables
+
+    ensure_cache_tables()
     statement = select(LlmNodeRun)
     if node:
         statement = statement.where(LlmNodeRun.node_name == node)
     if status:
         statement = statement.where(LlmNodeRun.status == NodeRunStatus(status))
-    rows = session.exec(
-        statement.order_by(LlmNodeRun.created_at.desc()).limit(limit)  # type: ignore[attr-defined]
-    ).all()
+    with Session(cache_engine) as session:
+        rows = session.exec(
+            statement.order_by(LlmNodeRun.created_at.desc()).limit(limit)  # type: ignore[attr-defined]
+        ).all()
 
     total = len(rows)
     schema_errors = sum(1 for r in rows if r.status is NodeRunStatus.SCHEMA_ERROR)

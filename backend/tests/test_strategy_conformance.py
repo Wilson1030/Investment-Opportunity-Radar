@@ -333,3 +333,52 @@ def test_registry_descriptions_have_no_markdown():
             assert "**" not in (text or ""), (
                 f"{code} 的 registry 文案含 Markdown 强调符：{text}"
             )
+
+
+# --------------------------------------------------------------------------- #
+# ★ 全项目守卫：面向前端的字符串里不得出现 Markdown 强调符
+# --------------------------------------------------------------------------- #
+def test_no_markdown_in_project_wide_user_facing_strings():
+    """★ 扫描**整个 app 包**，而不是只扫策略文案。
+
+    实测踩到两次：
+      · 策略条件说明里写了 ``（**不等于金额小**）``
+      · 异常归因里写了 ``**未找到一次性因素的公告依据**``
+
+    后端产出的文案在前端是**纯文本渲染**，星号会原样显示成排版符。
+    第二次是第一次修完之后的漏网 —— 因为当时的守卫只覆盖策略层。
+    所以这条改为全包扫描。
+
+    实现上先剥掉三引号块（文档字符串里的 ``**`` 是合法注释风格），
+    再找单行字符串字面量里的 ``**``。
+    """
+    import re
+    from pathlib import Path as _Path
+
+    import app as app_package
+
+    root = _Path(app_package.__file__).parent
+    offenders: list[str] = []
+    for path in sorted(root.rglob("*.py")):
+        source = path.read_text(encoding="utf-8")
+        body = re.sub(r'""".*?"""', "", source, flags=re.DOTALL)
+        body = re.sub(r"'''.*?'''", "", body, flags=re.DOTALL)
+        for lineno, line in enumerate(body.splitlines(), 1):
+            # 先剥掉行尾注释（Python 风格：``# `` 前有空白）。
+            # ★ 实测踩到：``relevant_text: str  # 原文段落摘录，**不得改写**``
+            # 这种行尾注释被当成面向用户的文案 —— 但它永远不会进前端。
+            # 只剥「空白 + # + 空白」开头的，避免误伤字符串里的 ``#``。
+            line = re.sub(r"\s#\s.*$", "", line)
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            # 必须是**成对**的 ``**…**``（Markdown 强调的形态）。
+            # 只认单个 ``**`` 会误报 Python 的幂运算符（如 ``10**8``）——
+            # 实测踩到：``f"...{abs(hash(x)) % 10**8}"`` 被当成 Markdown。
+            # 另外排除「两侧都是数字」的情形（幂运算几乎总带数字）。
+            if re.search(r"\*\*[^*\n]+\*\*", line) and not re.search(
+                r"[0-9]\*\*[0-9]", line
+            ):
+                offenders.append(f"{path.relative_to(root)}:{lineno}: {stripped[:70]}")
+
+    assert not offenders, "以下位置的字面 ** 会原样显示在前端：\n" + "\n".join(offenders)

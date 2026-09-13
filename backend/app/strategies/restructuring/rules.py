@@ -222,7 +222,11 @@ class RestructuringStrategy:
     # ---------- 催化剂阶梯 ----------
 
     def is_early_signal(self, facts: StrategyFacts) -> bool:
-        """当前阶段是否属于「早期苗头」（催化强度 ≤ early_stage_max_score）。
+        """当前阶段是否属于「早期苗头」。
+
+        依据是 ``CatalystStage.early`` 标志（由阶梯逐档声明），
+        **不是按分数阈值判断** —— 「存量｜重组已完成」分数也很低（5），
+        但那讲的是**已经完成**的事，不是早期。
 
         ★ 必须在卡片上显式标注：用户要的是「提前布局」，
         但把苗头当确定的事会误导决策（规格 §24 / §38）。

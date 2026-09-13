@@ -132,7 +132,6 @@ class StrategyDef:
     anti_patterns: tuple[str, ...] = ()
     sort_order: int = 100
     #: 催化强度 ≤ 此值即视为「早期信号」（需卡片显式标注，M7-02）
-    early_stage_max_score: float = 0.0
 
     # ---------- 自检辅助 ----------
 
@@ -209,7 +208,6 @@ _RESTRUCTURING = StrategyDef(
         EventType.M_AND_A,
     ),
     #: 早期信号的阶段上限（催化强度 ≤ 此值即视为「早期待确认」）
-    early_stage_max_score=30,
     invalidating_events=(
         # ---- 重组类 ----
         InvalidationDef(EventType.RESTRUCTURING, InvalidationSeverity.TERMINAL,

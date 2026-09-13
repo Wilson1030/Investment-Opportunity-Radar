@@ -121,16 +121,25 @@ class SqlNodeCache:
     #: 类级锁：同一进程内所有缓存实例共享（Session 本身也不是线程安全的）
     _io_lock = threading.Lock()
 
-    def __init__(self, session_or_engine) -> None:
-        """可传 Session 或 Engine。
+    def __init__(self, session_or_engine=None) -> None:
+        """默认使用**独立的缓存库**；显式传入 Session / Engine 时用传入的。
 
         ★ **每次调用开自己的 Session**，而不是长期持有一个 ——
         SQLAlchemy 的 ``Session`` **不是线程安全的**。踩过的坑：
         并发抽取时 worker 线程用主线程创建的 Session 提交，直接抛
         ``InvalidRequestError: This session is in 'prepared' state``。
         缓存表是独立的一张表，短生命周期 Session 的开销可以忽略。
+
+        ★ 不传参数时用 ``db.cache_engine``（独立文件）——
+        这样清业务库不会连带丢掉 LLM 缓存。
+        显式传入的场景是测试与「缓存跟着业务库走」的临时需求。
         """
-        if isinstance(session_or_engine, Session):
+        if session_or_engine is None:
+            from app.db import cache_engine, ensure_cache_tables
+
+            ensure_cache_tables()
+            self.engine = cache_engine
+        elif isinstance(session_or_engine, Session):
             self.engine = session_or_engine.get_bind()
         else:
             self.engine = session_or_engine

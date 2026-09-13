@@ -42,7 +42,7 @@ class Opportunity(SQLModel, table=True):
     #: 催化剂阶段（如「早期｜法院受理 / 指定管理人」）。
     #: ★ 必须落库并展示：否则用户会把早期苗头当成确定的事（§24 / §38）。
     catalyst_stage: str = Field(default="", index=True)
-    #: 是否为早期信号（催化强度 ≤ 策略定义的 early_stage_max_score）
+    #: 是否为早期信号（由策略的 CatalystStage.early 标志决定，**不是按分数阈值**）
     is_early_signal: bool = Field(default=False, index=True)
 
     # ---------- 分数（D08 双分制）----------

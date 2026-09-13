@@ -525,6 +525,7 @@ def _collect_financials(
     单只失败不阻塞整批 —— 记录错误后继续。
     """
     from app.ingest.financials import FinancialSource
+    from app.engine.anomaly import attribute_latest
     from app.ingest.normalizer import upsert_financials
     from app.models.knowledge import Stock
 
@@ -543,6 +544,10 @@ def _collect_financials(
             report.add_error("financials", "未取到财务期", code=stock.code)
             continue
         upsert_financials(session, company_id, periods, commit=False)
+        # ★ INV-F1：异常必须归因。这一步就是那条不变量的**写入端** ——
+        #   在此之前 is_anomaly / anomaly_note 从来没被写过，
+        #   于是「已归因则不扣分」的规则从未生效过。
+        attribute_latest(session, company_id)
         ok += 1
 
     session.commit()
@@ -641,7 +646,7 @@ def _extract_events(
         provider = build_provider(provider_name, base_url, api_key)
         runner = NodeRunner(
             provider=provider,
-            cache=SqlNodeCache(session) if not options.dry_run else _NoCache(),
+            cache=SqlNodeCache() if not options.dry_run else _NoCache(),
             model=model,
             max_attempts=settings.llm_max_attempts,
             timeout_seconds=settings.llm_timeout_seconds,
@@ -890,7 +895,7 @@ def _build_analysis_runner(session: Session, options: PipelineOptions) -> NodeRu
     print(f"[llm] 分析层 {provider_name}/{model} @ {base_url}")
     return NodeRunner(
         provider=provider,
-        cache=SqlNodeCache(session) if not options.dry_run else _NoCache(),
+        cache=SqlNodeCache() if not options.dry_run else _NoCache(),
         model=model,
         max_attempts=settings.llm_max_attempts,
         timeout_seconds=settings.llm_timeout_seconds,

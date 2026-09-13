@@ -262,10 +262,13 @@ def build_financial_facts(session: Session, company_id: int) -> FinancialFacts:
         .join(FinancialPeriod, FinancialMetric.period_id == FinancialPeriod.id)  # type: ignore[arg-type]
         .where(FinancialPeriod.company_id == company_id, FinancialMetric.is_anomaly == True)  # noqa: E712
     ).all()
+    # ★ 关键词表来自 engine.anomaly —— 写入端与读取端用**同一份**词表。
+    #   各写一份的话，某天写入端加了新词、读取端没加，
+    #   就会出现「标了异常但不认归因」这种静默不一致。
+    from app.engine.anomaly import ONE_OFF_KEYWORDS
+
     for is_anomaly, note in anomaly_rows:
-        if is_anomaly and note and any(
-            kw in note for kw in ("一次性", "减值", "重组费用", "非经常性", "资产处置")
-        ):
+        if is_anomaly and note and any(kw in note for kw in ONE_OFF_KEYWORDS):
             attributed = True
             break
 

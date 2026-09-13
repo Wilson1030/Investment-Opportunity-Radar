@@ -70,6 +70,55 @@ def _ensure_sqlite_parent() -> None:
     Path(DATABASE_URL.split("sqlite:///", 1)[-1]).parent.mkdir(parents=True, exist_ok=True)
 
 
+# --------------------------------------------------------------------------- #
+# LLM 节点缓存：**独立的数据库文件**
+# --------------------------------------------------------------------------- #
+#: 节点缓存库的 URL（默认与业务库同目录，但**是另一个文件**）。
+#:
+#: ★ 为什么要分开（踩过的坑）：缓存原先存在业务库的 ``llm_node_run`` 表里，
+#: 于是 ``tools/reset_db.py`` 删业务库时**连带把 LLM 缓存全丢了**。
+#: 而缓存的价值恰恰在于「清库重跑不用重新调用模型」——
+#: 一次真实重跑要几十次 LLM 调用，重跑时间从 1 分钟变成十几分钟。
+#:
+#: 分开是合理的：``llm_node_run`` **没有指向任何业务表的外键**，
+#: 它同时是缓存与审计日志，与业务数据没有引用关系。
+CACHE_DATABASE_URL = resolve_database_url(
+    settings.llm_cache_url or "sqlite:///./data/llm_cache.db"
+)
+
+_cache_connect_args = (
+    {"check_same_thread": False, "timeout": SQLITE_BUSY_TIMEOUT_SECONDS}
+    if CACHE_DATABASE_URL.startswith("sqlite")
+    else {}
+)
+cache_engine = create_engine(
+    CACHE_DATABASE_URL, echo=False, connect_args=_cache_connect_args
+)
+
+#: 缓存库只需要这一张表 —— 缓存库不跑 Alembic（它的结构不参与业务迁移）
+_CACHE_TABLES_READY = False
+
+
+def ensure_cache_tables() -> None:
+    """确保缓存表存在（幂等）。
+
+    ★ 缓存库**刻意不走 Alembic**：它的结构由 ``LlmNodeRun`` 模型单方面决定，
+    没有需要跨版本迁移的历史数据 —— 缓存丢了只是要重算，不需要保数据。
+    让缓存库跟业务库共享迁移链反而会让「清缓存」变成一件复杂的事。
+    """
+    global _CACHE_TABLES_READY
+    if _CACHE_TABLES_READY:
+        return
+    if CACHE_DATABASE_URL.startswith("sqlite"):
+        Path(CACHE_DATABASE_URL.split("sqlite:///", 1)[-1]).parent.mkdir(
+            parents=True, exist_ok=True
+        )
+    from app.models.audit import LlmNodeRun  # noqa: F401  —— 注册表结构
+
+    LlmNodeRun.metadata.create_all(cache_engine, tables=[LlmNodeRun.__table__])
+    _CACHE_TABLES_READY = True
+
+
 def init_db() -> None:
     """建表（骨架期用 create_all；正式环境用 ``alembic upgrade head``）。"""
     _ensure_sqlite_parent()
