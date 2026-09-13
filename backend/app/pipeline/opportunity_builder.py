@@ -79,6 +79,13 @@ class OpportunityBuildResult:
     status: str | None = None
     reason: str = ""
     invalidated: bool = False
+    #: ★ 是否真的跑了 AI 分析（``hunt_risk`` → ``analyze`` → ``score_semantic``）。
+    #:
+    #: 为什么需要它：分析在 ``_build_one`` 内部跑，runner 看不到跑了几个 ——
+    #: 于是漏斗的 ``deep_analyzed`` **从来没有被计数过**（实测报告里恒为 0，
+    #: 而缓存库里明明有 14 次 analyze）。报告说「0 次深度分析」而实际跑了 14 次，
+    #: 会让人以为分析阶段没接上。
+    analyzed: bool = False
 
 
 # --------------------------------------------------------------------------- #
@@ -476,6 +483,9 @@ def _build_one(
     # ---- AI 分析：反证 / 叙事 / 语义分（新写好的那 3 个节点）----
     # ★ 顺序：风险 → 叙事 → 语义分。任何一步失败都不阻塞机会生成，
     #   但会把 node_status 记下来，避免「静默降级成没有 AI 叙事」。
+    # ★ 默认 False：没有 analysis_runner（或 dry_run）时**不算**「做了深度分析」，
+    #   否则报告会把「没跑」说成「跑了 0 次」——两者含义不同。
+    ai_ok = False
     if analysis_runner is not None and not dry_run:
         # ★ 先提交，释放 SQLite 写锁。
         #   节点缓存用自己的连接写 llm_node_run；主 session 若仍持有未提交的
@@ -487,6 +497,7 @@ def _build_one(
             session, opportunity, facts, statement, score, analysis_runner,
             rule_next_watch=list(watch),
         )
+        ai_ok = ai.ok
         if ai.summary:
             opportunity.summary = ai.summary
         if ai.risks:
@@ -567,6 +578,7 @@ def _build_one(
         status=new_status.value,
         reason="已生成/更新机会",
         invalidated=should_invalidate,
+        analyzed=ai_ok,
     )
 
 

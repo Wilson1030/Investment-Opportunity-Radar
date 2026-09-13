@@ -936,6 +936,11 @@ def _build_opportunities(
                 report.funnel.increment("thesis_candidates")
             if result.created:
                 report.funnel.increment("cards")
+            # ★ 漏斗的这一级原先从未被计数（报告恒为 0，而实际跑了 14 次分析）。
+            #   它回答的是「有多少机会真的走完了 AI 分析链路」，
+            #   与 cards 不同：分析只对**入池**的机会跑。
+            if result.analyzed:
+                report.funnel.increment("deep_analyzed")
         outcome.opportunities.extend(results)
 
     if analysis_runner is not None:

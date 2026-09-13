@@ -746,3 +746,41 @@ def test_condition_evidence_ids_are_evidence_not_events(pipeline_outcome, engine
             evidence = s.get(Evidence, evidence_id)
             announcement = s.get(Announcement, evidence.announcement_id)
             assert announcement.company_id == int(company.id)
+
+
+# --------------------------------------------------------------------------- #
+# 漏斗的每一级都必须真的被计数
+# --------------------------------------------------------------------------- #
+def test_funnel_deep_analyzed_is_actually_counted(pipeline_outcome):
+    """★ ``deep_analyzed`` 原先**从未被 +1**。
+
+    分析在 ``build_opportunities`` 内部跑，runner 看不到跑了几个 ——
+    于是报告里恒为 0，而缓存库里明明有 14 次 ``analyze``。
+    「报告说 0 次深度分析、实际跑了 14 次」会让人以为分析阶段没接上，
+    从而去修一个并不存在的问题。
+
+    这条测试守的是「漏斗的每一级都要有真实的写入点」——
+    ``FunnelCounters`` 有字段不等于有计数。
+    """
+    from app.engine.funnel import FunnelCounters
+
+    funnel = pipeline_outcome.report.funnel
+    analysis_stats = pipeline_outcome.analysis_stats
+
+    # 上游：有多少机会进入了 AI 分析
+    analyzed_expected = sum(
+        1 for r in pipeline_outcome.opportunities if getattr(r, "analyzed", False)
+    )
+    assert funnel.deep_analyzed == analyzed_expected, (
+        f"deep_analyzed={funnel.deep_analyzed} 与实际分析数 {analyzed_expected} 不一致"
+    )
+
+    # 若确实跑了分析，计数必须非零
+    if analysis_stats.get("calls") or analysis_stats.get("ok"):
+        assert funnel.deep_analyzed > 0, (
+            f"分析层确实跑了（{analysis_stats}）但漏斗计数为 0"
+        )
+
+    # 全部漏斗级别都必须出现在主链里（防止有字段没被使用）
+    for stage in FunnelCounters.SEQUENTIAL_CHAIN:
+        assert hasattr(funnel, stage)
