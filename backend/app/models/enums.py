@@ -228,6 +228,16 @@ ALLOWED_STATUS_TRANSITIONS: dict[OpportunityStatus, set[OpportunityStatus]] = {
         OpportunityStatus.INVALIDATED,
         OpportunityStatus.ARCHIVED,
     },
-    OpportunityStatus.INVALIDATED: {OpportunityStatus.ARCHIVED},
+    # ★ 失效**不是**绝对的单向门：误判必须能被系统纠正。
+    #   实测：规则修正后东兴/信达两张卡的分数从 21 升到 43.5、
+    #   阶段从「终止/失败」变成「完成」，状态却永远卡在 invalidated。
+    #   允许回到「待确认 / 跟踪」，但**只在失效条件不再成立时** ——
+    #   该条件在 opportunity_builder 里判定（状态机是纯函数，看不到事实）。
+    #   并且要求连续 2 次判定一致（防抖动，见 recovery_streak）。
+    OpportunityStatus.INVALIDATED: {
+        OpportunityStatus.ARCHIVED,
+        OpportunityStatus.PENDING_CONFIRMATION,
+        OpportunityStatus.TRACKING,
+    },
     OpportunityStatus.ARCHIVED: set(),
 }

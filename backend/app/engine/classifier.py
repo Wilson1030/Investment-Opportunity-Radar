@@ -123,6 +123,12 @@ _SELF_INCLUSIVE_MARKERS: tuple[str, ...] = (
 )
 
 
+def _first_index(title: str, terms: tuple[str, ...]) -> int:
+    """任一关键词最早出现的位置；都没有则 ``-1``。"""
+    positions = [title.find(term) for term in terms if term in title]
+    return min(positions) if positions else -1
+
+
 def subject_is_third_party(title: str) -> bool:
     """公告主体是否为**第三方**（子公司 / 孙公司 / 控股股东 / 前控股股东…）。
 
@@ -134,20 +140,41 @@ def subject_is_third_party(title: str) -> bool:
     这是**确定性的标题模式识别**（不涉及「重整会不会成功」这类语义判断），
     因此放在规则层（规格 §28）。
 
+    ★★ 判定依据是**位置**，不是「含不含关键词」：
+    第三方主体必须出现在破产司法谓语**之前**，才算它是主句的主语。
+
+    为什么必须这样（真实反例）：``*ST长药`` 的
+    「关于法院裁定**不予受理重整申请**暨**子公司**宣告破产的公告」——
+    标题里确实有「子公司」，但它在「暨…」这个**并列从句**里，
+    主句讲的正是公司**自己**的重整申请被法院驳回（全文已确认：
+    「法院裁定不予受理……**对公司的重整申请**，决定依法终结公司预重整程序」）。
+    词袋式判定会把这条硬失效当成主体错位而**漏掉** ——
+    正是「死掉的苗头永远挂在雷达上」那个老问题。
+
     注意：含「公司及」这类并集标记时不视为错位 ——
     「关于法院决定对**公司及全资子公司**启动预重整的公告」里本公司确实在内。
     """
     title = title or ""
     if any(marker in title for marker in _SELF_INCLUSIVE_MARKERS):
         return False
-    if any(subject in title for subject in _ALWAYS_THIRD_PARTY):
-        return True
-    # 控股股东 / 实际控制人：只有谓语是「自己的破产司法程序」才算第三方
+
+    # 控股股东 / 实际控制人：谓语必须也是「自己的破产司法程序」才算第三方。
+    # （「控股股东筹划重大事项停牌」→ 现控股股东筹划的事通常涉及上市公司 → 不排除）
     if any(subject in title for subject in _SHAREHOLDER_SUBJECTS) and any(
         predicate in title for predicate in _BANKRUPTCY_PREDICATES
     ):
         return True
-    return False
+
+    # 子公司 / 孙公司 / 前控股股东：用位置判定
+    third_party_pos = _first_index(title, _ALWAYS_THIRD_PARTY)
+    if third_party_pos < 0:
+        return False
+    process_pos = _first_index(title, _BANKRUPTCY_PREDICATES)
+    if process_pos < 0:
+        # 标题里没有任何破产谓语 → 整条公告都在讲这个子公司
+        # （例：「关于原相对控股子公司重整事项进展暨完成股权变更的公告」）
+        return True
+    return third_party_pos < process_pos
 
 
 def is_post_deal(title: str) -> bool:

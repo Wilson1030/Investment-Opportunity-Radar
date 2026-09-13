@@ -154,6 +154,17 @@ class StrategyDef:
 # --------------------------------------------------------------------------- #
 _TERMINATE_WORDS = ("终止", "失败", "撤回", "撤销", "不予核准", "否决")
 
+#: 「终止」出现在这些短语里时，讲的是**上市地位**而不是交易失败。
+#:
+#: ★ 实测假阳性：东兴证券 / 信达证券的
+#: 「关于公司 A 股股票连续停牌直至**终止上市**、实施换股吸收合并的提示性公告」
+#: 被 ``_TERMINATE_WORDS`` 里的裸词「终止」命中，判成「重组终止」——
+#: 而换股吸收合并里的「终止上市」是合并**成功**的结果，判死方向完全反了。
+#:
+#: 退市**风险**另有 WARNING 规则（``early_only`` 的「风险提示」）覆盖：
+#: 退市风险该提醒，但不该直接把逻辑判死（规格 §23 的 severity 分级正为此存在）。
+_NOT_DEAL_TERMINATION = ("终止上市",)
+
 
 def _weights(**overrides: float) -> dict[ScoreDimension, float]:
     """在全局默认权重上做策略级覆盖（docs/04 §3.1）。
@@ -202,7 +213,8 @@ _RESTRUCTURING = StrategyDef(
     invalidating_events=(
         # ---- 重组类 ----
         InvalidationDef(EventType.RESTRUCTURING, InvalidationSeverity.TERMINAL,
-                        "重组终止 / 重大资产重组失败", _TERMINATE_WORDS),
+                        "重组终止 / 重大资产重组失败", _TERMINATE_WORDS,
+                        title_none_of=_NOT_DEAL_TERMINATION),
         InvalidationDef(EventType.CONTROL_CHANGE, InvalidationSeverity.SEVERE,
                         "控股权变更取消", ("取消", "终止", "解除")),
         InvalidationDef(EventType.REGULATORY_RISK, InvalidationSeverity.TERMINAL,
@@ -492,7 +504,8 @@ _MA_INTEGRATION = StrategyDef(
                          EventType.CONTROL_CHANGE),
     invalidating_events=(
         InvalidationDef(EventType.M_AND_A, InvalidationSeverity.TERMINAL,
-                        "并购终止 / 失败", _TERMINATE_WORDS),
+                        "并购终止 / 失败", _TERMINATE_WORDS,
+                        title_none_of=_NOT_DEAL_TERMINATION),
         InvalidationDef(EventType.EARNINGS_TURNAROUND, InvalidationSeverity.SEVERE,
                         "业绩承诺未达标", ("未达标", "未完成", "补偿")),
         InvalidationDef(EventType.REGULATORY_RISK, InvalidationSeverity.TERMINAL,

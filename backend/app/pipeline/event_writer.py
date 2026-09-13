@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from sqlmodel import Session, select
 
 from app.ai.schemas import ExtractEventOutput
-from app.engine import guard
+from app.engine import classifier, guard
 from app.facts import EventFact, StrategyFacts
 from app.models.enums import EventTimeKind, EventType, SourceType
 from app.models.evidence import Evidence
@@ -23,6 +23,7 @@ from app.models.events import Event
 from app.models.knowledge import Announcement, Paragraph
 from app.strategies import STRATEGIES, get_strategy
 from app.strategies.base import NotImplementedStrategy
+from app.strategies.restructuring.invalidation import is_completion_driven_delisting
 
 #: event_time 缺失时的回退来源标记
 EVENT_TIME_FROM_PUBLICATION = "publication_time"
@@ -86,6 +87,16 @@ def _mark_invalidating(event_type: EventType, title: str) -> bool:
     在事件层无从判断阶段，因此不能把这类规则烤进 Event.is_invalidating。
     （踩过的坑：问询函因此被标成失效事件，导致「失效事件」的含义被稀释。）
     """
+    # ★ 两个假阳性守卫（与机会层复用同一实现，不各写一份）：
+    #   1) 主体是子公司 / 控股股东 → 讲的是别人的破产司法程序，不是本公司的逻辑
+    #      （实测三安光电「控股股东债权人撤回破产重整申请」被判失效）
+    #   2) 「终止上市 + 换股吸收合并」是**完成**不是失败
+    #      （实测东兴证券 / 信达证券被判失效）
+    if classifier.subject_is_third_party(title):
+        return False
+    if is_completion_driven_delisting(title):
+        return False
+
     for code, definition in STRATEGIES.items():
         implementation = get_strategy(code)
         if isinstance(implementation, NotImplementedStrategy):

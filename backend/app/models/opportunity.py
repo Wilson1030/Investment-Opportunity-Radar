@@ -67,6 +67,12 @@ class Opportunity(SQLModel, table=True):
 
     # ---------- 时间（规格 §40 四个时间字段独立）----------
     first_discovered_at: datetime = Field(default_factory=_utcnow, index=True)
+    #: 连续「已失效但失效条件不再成立」的判定次数 —— 达到
+    #: ``RECOVERY_STREAK_REQUIRED`` 才把状态从 invalidated 纠正回可跟踪状态。
+    #:
+    #: ★ 为什么要计数器而不是立即复活：规则或数据的一次抖动不应该让卡片
+    #: 在「失效 / 待确认」之间来回跳。要求连续多次一致，等价于「稳定信号」。
+    recovery_streak: int = Field(default=0, ge=0)
     last_updated_at: datetime = Field(default_factory=_utcnow)
     score_version: str = ""
 

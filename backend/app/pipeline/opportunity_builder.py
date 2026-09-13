@@ -46,6 +46,7 @@ from app.models.opportunity import (
     ScoreItem,
 )
 from app.models.thesis import Thesis
+from app.strategies.restructuring.invalidation import is_completion_driven_delisting
 from app.pipeline import facts_builder
 from app.pipeline.analysis import analyze_opportunity
 from app.pipeline.event_writer import facts_after_write
@@ -59,6 +60,9 @@ if TYPE_CHECKING:  # pragma: no cover
 MIN_COVERAGE = 0.35
 #: 与用户画像的相关性门槛
 MIN_MATCH = 30.0
+
+#: 需要连续多少次「失效条件已不成立」才把卡片从失效纠正回来（防抖动）
+RECOVERY_STREAK_REQUIRED = 2
 #: 计入「风险」列表的最低严重度
 RISK_LIST_THRESHOLD = 0.40
 
@@ -120,22 +124,49 @@ def build_opportunities(
             ))
             continue
 
-        coverage = evaluation.coverage
-        if coverage < MIN_COVERAGE:
-            results.append(OpportunityBuildResult(
-                thesis_type=code.value, created=False, coverage=coverage,
-                reason=f"核心条件覆盖 {coverage:.2f} < {MIN_COVERAGE}（逻辑强度不足）",
-            ))
-            continue
+        # ★★ 门槛可以跳过「更新」，但**不能跳过「失效」**。
+        #
+        # 为什么：``_build_one`` 是唯一做失效判定与状态迁移的地方。
+        # 若门槛把「逻辑已失效」的已有卡片也挡在外面，它就永远不会被迁移到
+        # ``invalidated`` —— 死掉的苗头会一直挂在雷达上，
+        # 这是本产品最该避免的失败模式（规格 §22：挂着不放比漏掉更糟）。
+        #
+        # 但也不能让已有卡片**无条件**绕过门槛：画像把某策略权重设为 0
+        # （用户明确不关注）时不应继续产出该策略的机会卡
+        # （既有语义，见 test_match_score_scales_with_profile_weight）。
+        # 所以只对「已失效」这一种情况放行。
+        has_card = _has_existing_card(session, company_id, profile_id, code)
+        must_update = has_card and (
+            bool(strategy.invalidation_hits(facts))  # type: ignore[attr-defined]
+            or _not_actionable(facts)
+        )
 
+        coverage = evaluation.coverage
         match_score = compute_rule_score(
             facts_with_questions, code.value, ratio, evaluation=evaluation
         ).match_score
-        if match_score < MIN_MATCH:
+
+        # ★ 标的已无法布局 → 不进机会池（已有卡片的归档由 _build_one 处理）
+        if not has_card and _not_actionable(facts):
+            results.append(OpportunityBuildResult(
+                thesis_type=code.value, created=False, coverage=coverage,
+                reason="标的已停止交易（换股吸收合并 / 终止上市），不建卡 —— 事件仍保留在事件流",
+            ))
+            continue
+
+        if not must_update and coverage < MIN_COVERAGE:
             results.append(OpportunityBuildResult(
                 thesis_type=code.value, created=False, coverage=coverage,
                 match_score=match_score,
-                reason=f"匹配度 {match_score:.0f} < {MIN_MATCH}（与用户画像相关性不足）",
+                reason=f"核心条件覆盖 {coverage:.2f} < {MIN_COVERAGE}（逻辑强度不足，未建卡）",
+            ))
+            continue
+
+        if not must_update and match_score < MIN_MATCH:
+            results.append(OpportunityBuildResult(
+                thesis_type=code.value, created=False, coverage=coverage,
+                match_score=match_score,
+                reason=f"匹配度 {match_score:.0f} < {MIN_MATCH}（与用户画像相关性不足，未建卡）",
             ))
             continue
 
@@ -148,6 +179,45 @@ def build_opportunities(
         )
 
     return tuple(results)
+
+
+def _not_actionable(facts: StrategyFacts) -> bool:
+    """标的**已经无法布局** —— 股票因换股吸收合并停止交易、上市地位终止。
+
+    ★ 为什么这类公司不该进机会池（用户决定）：股票已停牌、价值已兑现，
+    「提前布局」无从谈起。公告与事件**全部保留**（可追溯），只是不建卡。
+
+    判定复用 ``is_completion_driven_delisting`` ——
+    与失效规则同一个实现，避免两处关键词漂移。
+    """
+    return any(
+        is_completion_driven_delisting(event.title or "") for event in facts.events
+    )
+
+
+def _has_existing_card(
+    session: Session, company_id: int, profile_id: int, thesis_type: ThesisType
+) -> bool:
+    """该（公司, 画像, 策略）是否已经有机会卡。
+
+    ★ 为什么需要单独判断：门槛要能区分「首次建卡」与「已有卡片」——
+    对已有卡片，失效判定必须照跑。见 ``build_opportunities`` 里的说明。
+    """
+    thesis = session.exec(
+        select(Thesis).where(
+            Thesis.company_id == company_id,
+            Thesis.thesis_type == ThesisType(thesis_type),
+        )
+    ).first()
+    if thesis is None:
+        return False
+    return session.exec(
+        select(Opportunity).where(
+            Opportunity.company_id == company_id,
+            Opportunity.profile_id == profile_id,
+            Opportunity.thesis_id == int(thesis.id or 0),
+        )
+    ).first() is not None
 
 
 def _accept_early_signals(session: Session, profile_id: int) -> bool:
@@ -270,8 +340,39 @@ def _build_one(
     score_before = opportunity.rule_score if opportunity else None
     status_before = opportunity.status if opportunity else None
 
+    # ---- 状态裁决 ----
+    # 顺序有讲究：失效 → 不可布局（归档）→ 待确认 → 跟踪
+    not_actionable = _not_actionable(facts)
+    recovery_streak = int(opportunity.recovery_streak or 0) if opportunity else 0
+    revived = False
+
     if should_invalidate:
         new_status = OpportunityStatus.INVALIDATED
+        recovery_streak = 0          # 失效条件成立 → 重新计数
+    elif status_before == OpportunityStatus.INVALIDATED.value and not_actionable:
+        # 已失效 + 标的已停止交易 → 归档（终态），不需要纠错
+        new_status = OpportunityStatus.ARCHIVED
+        recovery_streak = 0
+    elif status_before == OpportunityStatus.INVALIDATED.value and not not_actionable:
+        # ★ 纠错：当前是失效状态，但按现在的规则失效条件已不成立。
+        #
+        # 为什么要「连续 N 次」才复活：规则或数据的一次抖动不应该让卡片在
+        # 「失效 / 待确认」之间来回跳。连续多次一致等价于稳定信号。
+        recovery_streak += 1
+        if recovery_streak >= RECOVERY_STREAK_REQUIRED:
+            revived = True
+            recovery_streak = 0
+            new_status = (
+                OpportunityStatus.PENDING_CONFIRMATION
+                if open_questions else OpportunityStatus.TRACKING
+            )
+        else:
+            # 还不够稳定 → 保持失效（下一轮再判）
+            new_status = OpportunityStatus.INVALIDATED
+    elif not_actionable:
+        # 不可布局 → 归档（终态）
+        new_status = OpportunityStatus.ARCHIVED
+        recovery_streak = 0
     elif open_questions:
         new_status = OpportunityStatus.PENDING_CONFIRMATION
     else:
@@ -310,6 +411,7 @@ def _build_one(
     opportunity.match_score = score.match_score
     opportunity.rule_score = score.rule_score
     opportunity.risk_score = score.risk_score
+    opportunity.recovery_streak = recovery_streak
     opportunity.divergence = None
     opportunity.summary = None            # 由 analyze 节点填充（可选阶段）
     opportunity.why_in_radar = why_in_radar
@@ -333,6 +435,11 @@ def _build_one(
             to_status=new_status,
             reason=(
                 "命中逻辑失效条件" if should_invalidate
+                # ★ 纠错必须留痕：说清「是原来的判定不成立」，而不是「新发现了什么」
+                else "原失效判定已不再成立（规则修正后重算），恢复跟踪"
+                if revived
+                else "标的已停止交易（换股吸收合并 / 终止上市），归档"
+                if not_actionable
                 else f"存在 {len(open_questions)} 项待确认事项" if open_questions
                 else "无待确认事项，进入跟踪"
             ),

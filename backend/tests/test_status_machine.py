@@ -31,11 +31,43 @@ def test_legal_transitions(from_status, to_status):
 @pytest.mark.parametrize(
     "from_status,to_status",
     [
+        (OpportunityStatus.INVALIDATED, OpportunityStatus.PENDING_CONFIRMATION),
+        (OpportunityStatus.INVALIDATED, OpportunityStatus.TRACKING),
+    ],
+)
+def test_invalidated_can_recover(from_status, to_status):
+    """★ 失效**不是**绝对的单向门：误判必须能被系统纠正。
+
+    实测：规则修正后东兴/信达两张卡的分数从 21 升到 43.5、
+    阶段从「终止/失败」变成「完成」，状态却永远卡在 invalidated ——
+    卡片自相矛盾（分数很高却标着逻辑失效），且系统无法自救。
+
+    注意：这条边只是**允许**；真正的触发条件更严格 ——
+    必须「失效条件已不成立」且**连续 2 次判定一致**（防抖动），
+    见 opportunity_builder.RECOVERY_STREAK_REQUIRED。
+    """
+    guard.check_status_transition(from_status, to_status)
+
+
+def test_invalidated_cannot_jump_to_confirmed_or_observing():
+    """纠错只能回到「待确认 / 跟踪」，不能直接跳到已被证实的更强状态。
+
+    失效过的卡片必须重新走一遍确认流程 —— 否则一次误判纠正就等于
+    把「曾经失效」这件事抹掉了。
+    """
+    for target in (OpportunityStatus.THESIS_CONFIRMED, OpportunityStatus.OBSERVING,
+                   OpportunityStatus.DISCOVERED):
+        with pytest.raises(guard.InvariantViolation):
+            guard.check_status_transition(OpportunityStatus.INVALIDATED, target)
+
+
+@pytest.mark.parametrize(
+    "from_status,to_status",
+    [
         (OpportunityStatus.DISCOVERED, OpportunityStatus.THESIS_CONFIRMED),
         (OpportunityStatus.DISCOVERED, OpportunityStatus.TRACKING),
         (OpportunityStatus.ARCHIVED, OpportunityStatus.TRACKING),
         (OpportunityStatus.ARCHIVED, OpportunityStatus.DISCOVERED),
-        (OpportunityStatus.INVALIDATED, OpportunityStatus.TRACKING),
         (OpportunityStatus.THESIS_CONFIRMED, OpportunityStatus.PENDING_CONFIRMATION),
     ],
 )
