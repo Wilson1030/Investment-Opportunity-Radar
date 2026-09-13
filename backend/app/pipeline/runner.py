@@ -423,8 +423,46 @@ def _collect_market_first(
     )
 
     _collect_financials(session, company_ids, report)
+    _collect_valuation(session, company_ids, report)
 
     return company_ids, _pending_announcements(session)
+
+
+def _collect_valuation(
+    session: Session, company_ids: list[int], report: funnel.PipelineReport
+) -> None:
+    """为候选公司采估值快照（规格 §46 的辅助信息层）。
+
+    ★ 为什么必须在候选池阶段采：``value``（价值发现）策略的 C5
+    「估值处于历史较低区间」权重 0.20 —— 不采的话这条永远返回「未采集」，
+    价值策略就只能靠「有没有分红公告」判断，等于没有尺子。
+
+    数据源用百度股市通（东方财富估值接口在本环境不可达）。
+    单只失败不阻塞整批 —— 记录后继续。
+    """
+    from app.ingest.normalizer import upsert_valuation
+    from app.ingest.valuation import ValuationSource
+    from app.models.knowledge import Stock
+
+    source = ValuationSource()
+    ok = 0
+    for company_id in company_ids:
+        stock = session.exec(select(Stock).where(Stock.company_id == company_id)).first()
+        if stock is None:
+            continue
+        try:
+            snapshot = source.fetch(stock.code)
+        except AdapterError as exc:
+            report.add_error("valuation", str(exc), code=stock.code)
+            continue
+        upsert_valuation(
+            session, company_id, snapshot,
+            source_url=source.source_url(stock.code), commit=False,
+        )
+        ok += 1
+
+    session.commit()
+    print(f"[估值] {ok}/{len(company_ids)} 家取到估值快照（百度股市通）")
 
 
 def _collect_financials(

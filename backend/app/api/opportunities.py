@@ -221,9 +221,10 @@ def opportunity_detail(opportunity_id: int, session: Session = Depends(get_sessi
         "financial_signals": serializers.financial_signals(financial_facts),
         "news_clusters": [],
         # ★ 行情仅为辅助信息层（规格 §46），不是首页主体
-        "market": {
-            "note": "行情数据仅作辅助信息，用于观察事件后的价格行为（规格 §46）",
-        },
+        "market": serializers.market_layer(
+            session, company_id_int,
+            note="行情数据仅作辅助信息，用于观察事件后的价格行为（规格 §46）",
+        ),
         "status_history": [
             {
                 "from_status": str(h.from_status) if h.from_status else None,

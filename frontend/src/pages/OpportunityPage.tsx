@@ -352,6 +352,33 @@ export function OpportunityPage() {
       <section className="panel p-3 border-dashed">
         <div className="label mb-1">辅助信息层</div>
         <p className="text-2xs text-faint">{detail.market.note}</p>
+
+        {detail.market.valuation ? (
+          <div className="mt-2 text-2xs space-y-1">
+            <div className="flex flex-wrap gap-x-4 gap-y-1 num text-muted">
+              <span>
+                市值 {detail.market.valuation.market_cap?.toFixed(2) ?? '—'}{' '}
+                {detail.market.valuation.market_cap_unit}
+              </span>
+              <span>PE(TTM) {detail.market.valuation.pe_ttm?.toFixed(2) ?? '—'}</span>
+              <span>PB {detail.market.valuation.pb?.toFixed(2) ?? '—'}</span>
+              <span>
+                PE 分位{' '}
+                {detail.market.valuation.pe_percentile !== null
+                  ? `${(detail.market.valuation.pe_percentile * 100).toFixed(0)}%`
+                  : '—'}
+              </span>
+            </div>
+            <p className="text-faint">
+              {detail.market.valuation.direction_note} · 窗口{' '}
+              {detail.market.valuation.window_days} 天 · 数据日{' '}
+              {detail.market.valuation.as_of}
+            </p>
+          </div>
+        ) : (
+          <p className="text-2xs text-faint mt-1">{detail.market.valuation_note}</p>
+        )}
+
         <p className="text-2xs text-faint mt-1">
           行情与图表在这里、也只在这里 —— 它不是本系统的主体（规格 §19）。
         </p>

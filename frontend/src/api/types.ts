@@ -208,6 +208,21 @@ export interface FinancialSignal {
   tone: 'bad' | 'good' | 'muted'
 }
 
+export interface ValuationSnapshot {
+  as_of: string
+  market_cap: number | null
+  market_cap_unit: string
+  pe_ttm: number | null
+  pb: number | null
+  /** 分位越小表示估值越低（0 = 窗口内最便宜） */
+  pe_percentile: number | null
+  pb_percentile: number | null
+  window_days: number
+  source_name: string
+  source_url: string | null
+  direction_note: string
+}
+
 export interface OpportunityDetail {
   card: OpportunityCard
   thesis: ThesisPayload | null
@@ -222,7 +237,12 @@ export interface OpportunityDetail {
   /** 驱动 C4 / FUNDAMENTALS / RISK 的财务规则条件，可逐条核对 */
   financial_signals: FinancialSignal[]
   news_clusters: unknown[]
-  market: { note: string }
+  /** 辅助信息层（规格 §46）—— 不是首页主体，只用于事后观察 */
+  market: {
+    note: string
+    valuation?: ValuationSnapshot | null
+    valuation_note?: string
+  }
   status_history: {
     from_status: string | null
     to_status: string

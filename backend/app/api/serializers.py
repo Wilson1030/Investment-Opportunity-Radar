@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from app.engine import freshness
 from sqlmodel import Session, select
 
-from app.models.knowledge import FinancialMetric, FinancialPeriod
+from app.models.knowledge import FinancialMetric, FinancialPeriod, ValuationSnapshot
 from app.models.enums import (
     DIMENSION_LABELS,
     EventType,
@@ -448,6 +448,44 @@ def financial_series(
     return out
 
 
+def market_layer(session: Session, company_id: int, *, note: str) -> dict:
+    """辅助信息层（规格 §46）：估值快照 + 固定说明。
+
+    ★ 为什么放在「辅助层」而不是首页主体：规格 §46 明确要求
+    行情 / 估值不得成为机会发现的主体 —— 它是**事后观察**工具。
+    所以这里连字段名都保持中性（``percentile`` 越小越便宜，
+    而不是「低估 / 高估」这种带结论的词）。
+    """
+    row = session.exec(
+        select(ValuationSnapshot)
+        .where(ValuationSnapshot.company_id == company_id)
+        .order_by(ValuationSnapshot.as_of.desc())  # type: ignore[attr-defined]
+    ).first()
+    payload: dict = {"note": note}
+    if row is None:
+        payload["valuation"] = None
+        payload["valuation_note"] = (
+            "未采集到估值数据 —— 因此「估值是否处于历史低位」无法判断"
+            "（缺失就是不显示，不用估算值填充）"
+        )
+        return payload
+
+    payload["valuation"] = {
+        "as_of": row.as_of.isoformat(),
+        "market_cap": row.market_cap,
+        "market_cap_unit": "亿元",
+        "pe_ttm": row.pe_ttm,
+        "pb": row.pb,
+        "pe_percentile": row.pe_percentile,
+        "pb_percentile": row.pb_percentile,
+        "window_days": row.window_days,
+        "source_name": row.source_name,
+        "source_url": row.source_url,
+        "direction_note": "分位越小表示估值越低（0 = 窗口内最便宜）",
+    }
+    return payload
+
+
 def _signal(
     key: str, label: str, value_text: str, held: bool, impact: str, *,
     adverse_when_held: bool = True,
@@ -543,6 +581,7 @@ __all__ = [
     "evidence_detail",
     "open_question_detail",
     "financial_series",
+    "market_layer",
     "financial_signals",
     "opportunity_card",
     "score_breakdown",

@@ -151,3 +151,36 @@ class FinancialMetric(SQLModel, table=True):
     qoq: float | None = None
     is_anomaly: bool = False
     anomaly_note: str | None = None               # 「净利润下降」的可能原因
+
+
+class ValuationSnapshot(SQLModel, table=True):
+    """估值快照（规格 §46 的辅助信息层 + value 策略 C5 的判定依据）。
+
+    ★ 为什么值得单独建表而不是只在内存里算：
+    估值分位要能**复现与追溯** —— 「当时说它处于近三年 12% 分位」
+    这个判断必须能在事后核对（分位是相对量，会随窗口滚动而变化）。
+    所以连同 ``window_days`` 与 ``source_name`` 一起落库。
+
+    ★ 分位的方向约定：**数值越小 = 估值越低**（0 = 近三年最便宜）。
+    这个约定必须写死，否则某天算反了不会报错、只会静默输出相反结论。
+    """
+
+    __table_args__ = (
+        UniqueConstraint("company_id", "as_of", name="uq_valuation_daily"),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    company_id: int = Field(foreign_key="company.id", index=True)
+    as_of: date = Field(index=True)
+    #: 总市值（亿元）
+    market_cap: float | None = None
+    pe_ttm: float | None = None
+    pb: float | None = None
+    #: PE(TTM) 在窗口内的分位 ∈ [0,1]；越小越便宜
+    pe_percentile: float | None = None
+    #: PB 在窗口内的分位 ∈ [0,1]
+    pb_percentile: float | None = None
+    #: 分位计算所用的窗口天数（近三年 ≈ 1095）
+    window_days: int = 1095
+    source_name: str = "baidu_gushitong"
+    source_url: str | None = None

@@ -272,6 +272,48 @@ def upsert_financials(
     return written
 
 
+def upsert_valuation(
+    session: Session,
+    company_id: int,
+    snapshot,
+    *,
+    source_url: str | None = None,
+    commit: bool = True,
+):
+    """写入一天的估值快照（幂等：同一 ``(company_id, as_of)`` 更新而非新增）。
+
+    ★ 分位必须**连同窗口天数一起落库**：分位是相对量，
+    没有窗口信息的事后核对是无意义的（「12% 分位」在不同窗口下含义不同）。
+
+    返回写入的行；``snapshot.is_empty`` 时返回 ``None``（**不写空行** ——
+    一行全是 NULL 的快照只会让「有没有数据」更难判断）。
+    """
+    from app.models.knowledge import ValuationSnapshot
+
+    if getattr(snapshot, "is_empty", True):
+        return None
+
+    row = session.exec(
+        select(ValuationSnapshot).where(
+            ValuationSnapshot.company_id == company_id,
+            ValuationSnapshot.as_of == snapshot.as_of,
+        )
+    ).first()
+    if row is None:
+        row = ValuationSnapshot(company_id=company_id, as_of=snapshot.as_of)
+    row.market_cap = snapshot.market_cap
+    row.pe_ttm = snapshot.pe_ttm
+    row.pb = snapshot.pb
+    row.pe_percentile = snapshot.pe_percentile
+    row.pb_percentile = snapshot.pb_percentile
+    row.window_days = snapshot.window_days
+    row.source_url = source_url
+    session.add(row)
+    if commit:
+        session.commit()
+    return row
+
+
 def upsert_news(
     session: Session, company_id: int | None, item: dict, *, dry_run: bool = False,
     commit: bool = True,

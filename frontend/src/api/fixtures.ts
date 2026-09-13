@@ -444,7 +444,22 @@ export const FIXTURE_DETAIL: OpportunityDetail = {
     { key: 'one_off_attributed', label: '恶化是否已归因', value_text: '未归因', held: false, impact: '决定 C4 是否扣分', tone: 'muted' },
   ],
   news_clusters: [],
-  market: { note: '行情数据仅作辅助信息，用于观察事件后的价格行为（规格 §46）' },
+  market: {
+    note: '行情数据仅作辅助信息，用于观察事件后的价格行为（规格 §46）',
+    valuation: {
+      as_of: '2026-09-13',
+      market_cap: 32.1,
+      market_cap_unit: '亿元',
+      pe_ttm: 18.4,
+      pb: 1.8,
+      pe_percentile: 0.22,
+      pb_percentile: 0.31,
+      window_days: 1095,
+      source_name: 'baidu_gushitong',
+      source_url: 'https://gushitong.baidu.com/stock/ab-600xxx',
+      direction_note: '分位越小表示估值越低（0 = 窗口内最便宜）',
+    },
+  },
   status_history: [
     { from_status: null, to_status: 'discovered', reason: '进入重组预期候选池', score_before: null, score_after: null, changed_at: '2026-09-08T19:40:00Z' },
     { from_status: 'discovered', to_status: 'pending_confirmation', reason: '存在 6 项待确认事项', score_before: null, score_after: 67.59, changed_at: '2026-09-08T20:05:00Z' },

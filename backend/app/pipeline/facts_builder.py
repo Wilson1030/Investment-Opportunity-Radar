@@ -35,6 +35,7 @@ from app.models.knowledge import (
     FinancialMetric,
     FinancialPeriod,
     Stock,
+    ValuationSnapshot,
 )
 
 #: 判定「历史失败」的关键词
@@ -373,6 +374,27 @@ def build_market_facts(
 # --------------------------------------------------------------------------- #
 # 汇总
 # --------------------------------------------------------------------------- #
+def build_valuation_percentile(session: Session, company_id: int) -> float | None:
+    """最新估值快照的综合分位（越小越便宜）；没有数据返回 ``None``。
+
+    ★ 返回 ``None`` 而不是 0：0 表示「窗口内最便宜」，
+    而「没有估值数据」是另一件事。value 策略的 C5 依赖这个区别 ——
+    否则「查不到」会被读成「很便宜」。
+    """
+    row = session.exec(
+        select(ValuationSnapshot)
+        .where(ValuationSnapshot.company_id == company_id)
+        .order_by(ValuationSnapshot.as_of.desc())  # type: ignore[attr-defined]
+    ).first()
+    if row is None:
+        return None
+    if row.pe_percentile is not None:
+        return float(row.pe_percentile)
+    if row.pb_percentile is not None:
+        return float(row.pb_percentile)
+    return None
+
+
 def build_strategy_facts(session: Session, company_id: int) -> StrategyFacts:
     """组装一份完整的 :class:`StrategyFacts`（``open_question_count`` 先置 0）。"""
     events = build_event_facts(session, company_id)
@@ -398,6 +420,7 @@ def build_strategy_facts(session: Session, company_id: int) -> StrategyFacts:
             any(kw in e.title for kw in _PENDING_APPROVAL_KEYWORDS) for e in events
         ),
         has_conflicting_media=False,   # 需要口径比对，MVP 未接入
+        valuation_percentile=build_valuation_percentile(session, company_id),
         evidence_levels=collect_evidence_levels(session, company_id),
         newest_evidence_age_days=newest_evidence_age_days(session, company_id),
     )
