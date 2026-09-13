@@ -315,13 +315,23 @@ def upsert_valuation(
 
 
 def upsert_news(
-    session: Session, company_id: int | None, item: dict, *, dry_run: bool = False,
+    session: Session,
+    item,
+    *,
+    related_company_ids: list[int] | None = None,
+    dry_run: bool = False,
     commit: bool = True,
 ) -> News | None:
+    """写入一条新闻（幂等：``(source_name, external_id)`` 唯一）。
+
+    接受 :class:`app.ingest.news.RawNews`。``related_company_ids`` 由调用方
+    通过 :func:`app.ingest.news.match_companies` 匹配得到 ——
+    **一条新闻可以关联多家公司**（例：「A 公司收购 B 公司」）。
+    """
     existing = session.exec(
         select(News).where(
-            News.source_name == item["source_name"],
-            News.external_id == item["external_id"],
+            News.source_name == item.source_name,
+            News.external_id == item.external_id,
         )
     ).first()
     if existing is not None:
@@ -330,16 +340,17 @@ def upsert_news(
         return None
 
     news = News(
-        external_id=item["external_id"],
-        title=item["title"],
-        summary=item.get("summary"),
-        source_name=item["source_name"],
+        external_id=item.external_id,
+        title=item.title,
+        summary=item.summary,
+        source_name=item.source_name,
         source_reliability=ReliabilityLevel.C,
-        publication_time=item["publication_time"],
+        publication_time=item.published_at,
         discovery_time=datetime.now(timezone.utc),
-        url=item["url"],
-        related_company_ids=[company_id] if company_id else [],
-        event_type=classifier.classify_announcement(item["title"]),
+        url=item.url,
+        related_company_ids=list(related_company_ids or []),
+        # 与公告走**同一套**分类器 —— 两处关键词不漂移
+        event_type=classifier.classify_announcement(item.title),
     )
     session.add(news)
     if commit:
@@ -347,6 +358,42 @@ def upsert_news(
         session.refresh(news)
     return news
 
+
+def upsert_cluster(
+    session: Session,
+    company_id: int,
+    draft,
+    *,
+    commit: bool = True,
+):
+    """写入 / 更新一家公司的事件簇（幂等：同一公司同一事件类型只保留一簇）。
+
+    ★ 为什么按 ``(company_id, event_type)`` 而不是每次新建一簇：
+    簇的数量会直接进入「市场关注度」维度并影响评分 ——
+    每次采集都新建一簇的话，跑两次就有两倍的「关注度」。
+    所以同一公司同一事件类型**就地更新**（成员数、要点、时间范围）。
+    """
+    from app.models.events import EventCluster
+
+    row = session.exec(
+        select(EventCluster).where(
+            EventCluster.company_id == company_id,
+            EventCluster.event_type == draft.event_type,
+        )
+    ).first()
+    if row is None:
+        row = EventCluster(company_id=company_id, label=draft.label)
+    row.label = draft.label
+    row.event_type = draft.event_type
+    row.member_count = draft.member_count
+    row.key_points = list(draft.key_points)
+    row.first_seen = draft.first_seen or row.first_seen
+    row.last_seen = draft.last_seen or row.last_seen
+    session.add(row)
+    if commit:
+        session.commit()
+        session.refresh(row)
+    return row
 
 def source_type_of(raw: RawAnnouncement) -> SourceType:
     return SourceType.ANNOUNCEMENT

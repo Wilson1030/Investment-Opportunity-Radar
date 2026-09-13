@@ -20,6 +20,7 @@ from app.models.enums import (
     ScoreDimension,
     ThesisType,
 )
+from app.models.events import EventCluster
 from app.models.evidence import Evidence
 from app.models.events import Event
 from app.models.knowledge import Company, Stock
@@ -448,6 +449,33 @@ def financial_series(
     return out
 
 
+def news_clusters(session: Session, company_id: int) -> list[dict]:
+    """该公司的新闻聚类（规格 §42 / §43）。
+
+    用户看到的是「围绕该公司的 N 条报道」，而不是 N 张重复卡片。
+
+    ``key_points`` 是**真实标题**（去近重复后的代表条目），
+    不是 LLM 概括 —— 这一栏的作用正是让用户能快速核对「报道都在说什么」。
+    """
+    rows = session.exec(
+        select(EventCluster)
+        .where(EventCluster.company_id == company_id)
+        .order_by(EventCluster.member_count.desc())  # type: ignore[attr-defined]
+    ).all()
+    return [
+        {
+            "id": int(row.id or 0),
+            "label": row.label,
+            "event_type": row.event_type.value if row.event_type else None,
+            "member_count": row.member_count,
+            "key_points": list(row.key_points or []),
+            "first_seen": row.first_seen.isoformat() if row.first_seen else None,
+            "last_seen": row.last_seen.isoformat() if row.last_seen else None,
+        }
+        for row in rows
+    ]
+
+
 def market_layer(session: Session, company_id: int, *, note: str) -> dict:
     """辅助信息层（规格 §46）：估值快照 + 固定说明。
 
@@ -582,6 +610,7 @@ __all__ = [
     "open_question_detail",
     "financial_series",
     "market_layer",
+    "news_clusters",
     "financial_signals",
     "opportunity_card",
     "score_breakdown",

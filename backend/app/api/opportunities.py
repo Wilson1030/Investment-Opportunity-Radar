@@ -219,7 +219,8 @@ def opportunity_detail(opportunity_id: int, session: Session = Depends(get_sessi
         "evidence": [serializers.evidence_detail(e) for e in evidence],
         "financials": serializers.financial_series(session, company_id_int),
         "financial_signals": serializers.financial_signals(financial_facts),
-        "news_clusters": [],
+        # ★ 规格 §42/§43：用户看到「围绕该事件的 N 条报道」，而不是 N 张重复卡片
+        "news_clusters": serializers.news_clusters(session, company_id_int),
         # ★ 行情仅为辅助信息层（规格 §46），不是首页主体
         "market": serializers.market_layer(
             session, company_id_int,

@@ -16,7 +16,7 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import datetime, timezone
 
-from sqlmodel import Session, select
+from sqlmodel import func, Session, select
 
 from app.facts import (
     CompanyFacts,
@@ -35,8 +35,21 @@ from app.models.knowledge import (
     FinancialMetric,
     FinancialPeriod,
     Stock,
+    News,
     ValuationSnapshot,
 )
+
+#: 判断「市场关注度低」所需的最低新闻样本量。
+#:
+#: ★ 为什么需要这个阈值（而不是「有任何新闻就算采过」）：
+#: 只抓几十条电报时，某家公司没被提到是**样本问题**，不是「没人讨论」。
+#: 从这个样本断言「关注度低」并给满分，是拿缺失当结论。
+#:
+#: 阈值含义：约 500 条新闻大致覆盖数日的全市场财经快讯，
+#: 此时「没有任何一条提到该公司」才开始有信息量。
+#: 这是一个**策略选择**（可调），但必须显式存在 ——
+#: 没有它，"0 簇" 与 "样本不足" 会混成同一个值。
+MIN_NEWS_SAMPLE_FOR_ATTENTION = 500
 
 #: 判定「历史失败」的关键词
 _FAILURE_KEYWORDS = ("终止", "失败", "撤回", "撤销", "未通过", "不予核准")
@@ -340,11 +353,26 @@ def build_market_facts(
     它们能抬高「市场关注」，但不能抬高确定性，也不能抬高匹配度。
     """
     # 事件簇数量（新闻聚类结果，规格 §43）
-    cluster_count = len(
-        session.exec(
-            select(EventCluster.id).where(EventCluster.company_id == company_id)
-        ).all()
-    )
+    #
+    # ★ 「没采到新闻」与「确实没人讨论」是两件事 —— 前者是 None（不知道），
+    #   后者才该是 0。这里用**样本量**而不是「有没有任何记录」来区分：
+    #
+    #   实测踩到：采了 40 条财联社电报，其中没有一条提到候选公司 →
+    #   ``cluster_count = 0``。于是 value 策略的 C6「低市场关注度」
+    #   给满分 —— 而真实情况是**我们只看了几小时的新闻**，
+    #   根本不足以断言「没人讨论这家公司」。
+    #
+    #   样本不足时说「不知道」，不说「没有」。
+    news_sample = int(session.exec(select(func.count()).select_from(News)).one() or 0)
+    cluster_count: int | None
+    if news_sample < MIN_NEWS_SAMPLE_FOR_ATTENTION:
+        cluster_count = None
+    else:
+        cluster_count = len(
+            session.exec(
+                select(EventCluster.id).where(EventCluster.company_id == company_id)
+            ).all()
+        )
 
     # E 类讨论：该公司公告所衍生的 market_discussion 类证据
     social_buzz = (

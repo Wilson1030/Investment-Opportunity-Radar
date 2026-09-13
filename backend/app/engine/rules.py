@@ -452,15 +452,22 @@ def compute_market_attention_dimension(
     total = MARKET_BASELINE
 
     clusters = market.news_cluster_count
-    if clusters >= 10:
+    # ★ None = 新闻数据未采集。此时**不给关注度加成**，
+    #   也不能给 0 ——— 说「没人讨论」与「不知道有没有人讨论」是两件事。
+    #   （原先默认 0 会让没接新闻数据的环境一直输出「关注度很低」。）
+    #
+    #   注意：这里**不要提前 return** —— 异常波动等信号与新闻数据无关，
+    #   早退会把它们一起丢掉（实测踩到：返回类型从 tuple 变成 list，
+    #   下游 ``result.dimension`` 直接报 AttributeError）。
+    if clusters is not None and clusters >= 10:
         total += 20
         hits.append(RuleHit("R-GEN-MA-01", ScoreDimension.MARKET_ATTENTION, 20,
                             f"相关报道/讨论形成 {clusters} 个事件簇"))
-    elif clusters >= 3:
+    elif clusters is not None and clusters >= 3:
         total += 10
         hits.append(RuleHit("R-GEN-MA-01", ScoreDimension.MARKET_ATTENTION, 10,
                             f"相关报道/讨论形成 {clusters} 个事件簇"))
-    elif clusters >= 1:
+    elif clusters is not None and clusters >= 1:
         total += 5
         hits.append(RuleHit("R-GEN-MA-01", ScoreDimension.MARKET_ATTENTION, 5,
                             f"相关报道/讨论形成 {clusters} 个事件簇"))

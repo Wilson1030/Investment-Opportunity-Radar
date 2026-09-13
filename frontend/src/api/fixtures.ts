@@ -443,7 +443,21 @@ export const FIXTURE_DETAIL: OpportunityDetail = {
     { key: 'debt_ratio_rising', label: '资产负债率', value_text: '在上升', held: true, impact: '影响「基本面」FUNDAMENTALS', tone: 'bad' },
     { key: 'one_off_attributed', label: '恶化是否已归因', value_text: '未归因', held: false, impact: '决定 C4 是否扣分', tone: 'muted' },
   ],
-  news_clusters: [],
+  news_clusters: [
+    {
+      id: 5,
+      label: '围绕该公司的 17 条报道（BANKRUPTCY_REORGANIZATION）',
+      event_type: 'BANKRUPTCY_REORGANIZATION',
+      member_count: 17,
+      key_points: [
+        'ST XXX 关于法院裁定受理重整申请的公告',
+        'ST XXX 重整进展：法院指定管理人',
+        '机构点评：重整对债权人的影响',
+      ],
+      first_seen: '2026-09-08T09:00:00Z',
+      last_seen: '2026-09-10T14:00:00Z',
+    },
+  ],
   market: {
     note: '行情数据仅作辅助信息，用于观察事件后的价格行为（规格 §46）',
     valuation: {

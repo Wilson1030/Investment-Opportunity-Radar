@@ -106,19 +106,28 @@ def test_company_upsert_marks_st_when_discovered_later(session):
 
 
 def test_news_upsert_is_idempotent(session):
-    item = {
-        "external_id": "http://example.com/news/1",
-        "title": "某公司重组预期升温",
-        "summary": "……",
-        "source_name": "证券时报",
-        "url": "http://example.com/news/1",
-        "publication_time": T0,
-    }
+    """同一条新闻重复采集只落一条（``(source_name, external_id)`` 唯一）。
+
+    ★ 签名改过：现在接受 :class:`app.ingest.news.RawNews`，
+    并由调用方传入 ``related_company_ids``（一条新闻可关联多家公司）。
+    原先接受 dict + 单个 company_id —— 那种形状无法表达
+    「A 公司收购 B 公司」这类同时涉及两家公司的新闻。
+    """
+    from app.ingest.news import RawNews
+
+    item = RawNews(
+        source_name="证券时报",
+        external_id="http://example.com/news/1",
+        title="某公司重组预期升温",
+        summary="……",
+        url="http://example.com/news/1",
+        published_at=T0,
+    )
     company = upsert_company(session, "600xxx", "ST XXX", is_st=True)
     company_id = int(company.id or 0)
 
-    first = upsert_news(session, company_id, item)
-    second = upsert_news(session, company_id, item)
+    first = upsert_news(session, item, related_company_ids=[company_id])
+    second = upsert_news(session, item, related_company_ids=[company_id])
     assert first is not None and second is not None
     assert int(first.id) == int(second.id)
 
@@ -138,10 +147,12 @@ def test_dry_run_does_not_write_business_tables(session):
     count = session.exec(select(func.count()).select_from(Announcement)).one()
     assert int(count) == 0
 
-    news = upsert_news(session, int(company.id), {
-        "external_id": "x", "title": "t", "source_name": "s", "url": "u",
-        "publication_time": T0,
-    }, dry_run=True)
+    from app.ingest.news import RawNews
+
+    news = upsert_news(session, RawNews(
+        source_name="s", external_id="x", title="t", summary="",
+        url="u", published_at=T0,
+    ), dry_run=True)
     assert news is None
 
 

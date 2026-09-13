@@ -157,6 +157,14 @@ def _condition_c6(facts: StrategyFacts) -> ConditionResult:
     """
     clusters = facts.market.news_cluster_count
     buzz = facts.market.social_buzz
+    if clusters is None:
+        # ★ 没有新闻数据时**不能**给「关注度低」的分数。
+        #   那是把「不知道」说成「没人讨论」——而且这一条永远满分，
+        #   会给所有标的都加同样的分（等价于没加，但看起来像有判断）。
+        return ConditionResult(
+            _C6.key, _C6.label, _C6.weight, 0.0,
+            "新闻数据未采集，无法判断市场关注度（不等于关注度低）",
+        )
     if clusters == 0 and not buzz:
         return ConditionResult(_C6.key, _C6.label, _C6.weight, 1.0,
                                "无新闻聚类、无社交讨论（关注度低）")

@@ -104,7 +104,12 @@ class ShareholderFacts:
 
 @dataclass(frozen=True)
 class MarketFacts:
-    news_cluster_count: int = 0
+    #: 新闻聚类数。``None`` 表示**新闻数据未采集**（≠ 0）。
+    #:
+    #: ★ 这个区分不能省：市场关注度规则把「0 个新闻簇」读作「没人讨论」，
+    #: 于是没接新闻数据时系统会一直宣称所有公司关注度都很低 ——
+    #: 一个静默的假结论。``None`` 让规则层可以明确说「不知道」。
+    news_cluster_count: int | None = None
     abnormal_volatility: bool = False
     on_dragon_tiger: bool = False
     institutional_reports_delta: int = 0

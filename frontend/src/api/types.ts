@@ -208,6 +208,17 @@ export interface FinancialSignal {
   tone: 'bad' | 'good' | 'muted'
 }
 
+export interface NewsCluster {
+  id: number
+  label: string
+  event_type: string | null
+  member_count: number
+  /** 真实标题（去近重复后的代表条目），不是模型概括 */
+  key_points: string[]
+  first_seen: string | null
+  last_seen: string | null
+}
+
 export interface ValuationSnapshot {
   as_of: string
   market_cap: number | null
@@ -236,7 +247,8 @@ export interface OpportunityDetail {
   financials: FinancialPeriod[]
   /** 驱动 C4 / FUNDAMENTALS / RISK 的财务规则条件，可逐条核对 */
   financial_signals: FinancialSignal[]
-  news_clusters: unknown[]
+  /** 新闻聚类（规格 §42/§43）——「围绕该公司的 N 条报道」，不是 N 张重复卡片 */
+  news_clusters: NewsCluster[]
   /** 辅助信息层（规格 §46）—— 不是首页主体，只用于事后观察 */
   market: {
     note: string

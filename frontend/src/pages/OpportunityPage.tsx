@@ -247,6 +247,35 @@ export function OpportunityPage() {
         </ul>
       </section>
 
+      {/* ④b 新闻聚类 —— 规格 §42/§43：N 条报道归成一簇，不是 N 张重复卡片 */}
+      {detail.news_clusters.length > 0 && (
+        <section className="panel p-3 space-y-2">
+          <div className="label">相关报道</div>
+          {detail.news_clusters.map((cluster) => (
+            <div key={cluster.id} className="space-y-1">
+              <div className="flex items-baseline justify-between text-xs">
+                <span>{cluster.label}</span>
+                {cluster.last_seen && (
+                  <span className="num text-2xs text-faint">
+                    最近 {cluster.last_seen.slice(0, 16).replace('T', ' ')}
+                  </span>
+                )}
+              </div>
+              <ul className="space-y-0.5 text-2xs text-muted">
+                {cluster.key_points.map((point) => (
+                  <li key={point} className="border-l-2 border-border pl-2">
+                    {point}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
+          <p className="text-2xs text-faint">
+            要点为<b>真实标题</b>（去近重复后的代表条目），不是模型概括 —— 便于你直接核对。
+          </p>
+        </section>
+      )}
+
       {/* ⑤ 基本面数据 —— 让「基本面扣分」可核对（P1-1） */}
       <FinancialsPanel
         financials={detail.financials ?? []}

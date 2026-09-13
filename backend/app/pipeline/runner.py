@@ -424,8 +424,55 @@ def _collect_market_first(
 
     _collect_financials(session, company_ids, report)
     _collect_valuation(session, company_ids, report)
+    _collect_news(session, company_ids, report)
 
     return company_ids, _pending_announcements(session)
+
+
+def _collect_news(
+    session: Session, company_ids: list[int], report: funnel.PipelineReport
+) -> None:
+    """采集财经新闻并聚类（规格 §42 / §43）。
+
+    ★ 只有全市场新闻源（财联社电报 / 新浪财经），没有「按公司查新闻」的接口。
+    所以流程是：**先抓全市场 → 再用公司名 / 代码匹配 → 按事件类型聚簇**。
+    匹配不到任何候选公司时也不报错（今天的新闻可能确实与候选池无关）。
+
+    聚类结果进入 ``MarketFacts.news_cluster_count`` →
+    「市场关注度」维度与 ``value`` 策略的 C6（低关注度加分）。
+    """
+    from app.ingest.normalizer import upsert_cluster, upsert_news
+    from app.ingest.news import NewsSource, cluster_news, match_companies
+    from app.models.knowledge import Company, Stock
+
+    try:
+        items = NewsSource().fetch(limit=50)
+    except AdapterError as exc:
+        report.add_error("news", str(exc))
+        return
+
+    # 候选公司清单（用于把新闻关联到公司）
+    companies: list[tuple[int, str, str]] = []
+    for company_id in company_ids:
+        company = session.get(Company, company_id)
+        stock = session.exec(select(Stock).where(Stock.company_id == company_id)).first()
+        if company is not None:
+            companies.append((company_id, company.name or "", stock.code if stock else ""))
+
+    stored = 0
+    for item in items:
+        related = match_companies(f"{item.title} {item.summary}", companies)
+        if upsert_news(session, item, related_company_ids=related, commit=False) is not None:
+            stored += 1
+    session.commit()
+
+    drafts = cluster_news(items, companies)
+    for company_id, draft in drafts.items():
+        upsert_cluster(session, company_id, draft, commit=False)
+    session.commit()
+
+    print(f"[新闻] 抓取 {len(items)} 条，落库 {stored} 条，"
+          f"聚类 {len(drafts)} 簇（覆盖 {len(drafts)}/{len(company_ids)} 家候选）")
 
 
 def _collect_valuation(
