@@ -179,6 +179,35 @@ export interface OpenQuestion {
   confirmed_evidence_id?: number | null
 }
 
+export interface FinancialMetricEntry {
+  value: number | null
+  /** 缺失表示**无量纲比率**（毛利率 / 资产负债率），不要当成「漏了单位」 */
+  unit?: string
+  yoy: number | null
+  is_anomaly?: boolean
+  anomaly_note?: string | null
+}
+
+export interface FinancialPeriod {
+  /** 报告期标签，如 2026H1 / 2025A —— 不是日期 */
+  period: string
+  period_end: string
+  report_type: string
+  metrics: Record<string, FinancialMetricEntry>
+}
+
+export interface FinancialSignal {
+  /** 与 engine/rules.py 的规则键一致，可追溯 */
+  key: string
+  label: string
+  value_text: string
+  held: boolean
+  /** 中性陈述：这条影响哪个维度 */
+  impact: string
+  /** bad=不利成立 / good=有利成立 / muted=只是没有好消息 */
+  tone: 'bad' | 'good' | 'muted'
+}
+
 export interface OpportunityDetail {
   card: OpportunityCard
   thesis: ThesisPayload | null
@@ -188,6 +217,10 @@ export interface OpportunityDetail {
   next_events_to_watch: string[]
   timeline: { date: string | null; event_type: string; title: string; evidence_id: number | null }[]
   evidence: Evidence[]
+  /** 结构化财务（最新在前）；空数组表示未采集到，**不是**采集到但全为 0 */
+  financials: FinancialPeriod[]
+  /** 驱动 C4 / FUNDAMENTALS / RISK 的财务规则条件，可逐条核对 */
+  financial_signals: FinancialSignal[]
   news_clusters: unknown[]
   market: { note: string }
   status_history: {

@@ -9,6 +9,9 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from app.engine import freshness
+from sqlmodel import Session, select
+
+from app.models.knowledge import FinancialMetric, FinancialPeriod
 from app.models.enums import (
     DIMENSION_LABELS,
     EventType,
@@ -365,6 +368,171 @@ def strategy_detail(definition) -> dict:
     }
 
 
+
+# --------------------------------------------------------------------------- #
+# 财务数据（契约见 docs/05-API契约.md §3.3 的 ``financials``）
+# --------------------------------------------------------------------------- #
+#: 金额类指标：库里以「元」存储，对外按「亿元」显示
+#: （契约如此；也让「20.1 亿元」比「2010000000」可读得多）
+_MONEY_METRICS = frozenset({"revenue", "net_profit", "ocf"})
+_YI = 1e8
+
+
+def _metric_entry(metric: str, m: FinancialMetric) -> dict:
+    """单个指标 → 契约形状 ``{value, unit?, yoy, is_anomaly?, anomaly_note?}``。"""
+    entry: dict = {}
+    if m.value is None:
+        entry["value"] = None
+    elif metric in _MONEY_METRICS:
+        entry["value"] = round(m.value / _YI, 4)
+        entry["unit"] = "亿元"
+    else:
+        entry["value"] = round(m.value, 6)
+        # 无量纲比率**不给 unit** —— 硬塞「%」会让 0.18 被读成 0.18%
+        if m.unit:
+            entry["unit"] = m.unit
+    entry["yoy"] = round(m.yoy, 6) if m.yoy is not None else None
+    # INV-F1：指标恶化必须带归因才算「可解释」
+    if m.is_anomaly:
+        entry["is_anomaly"] = True
+        entry["anomaly_note"] = m.anomaly_note
+    return entry
+
+
+def financial_series(
+    session: Session, company_id: int, *, limit: int = 8
+) -> list[dict]:
+    """按报告期**倒序**（最新在前）返回结构化财务。
+
+    ``period`` 用报告期标签（``2026H1`` / ``2025A``）而不是日期 ——
+    看 ``2026-06-30`` 容易误以为是「某一天的数据」。
+    """
+    from app.ingest.financials import METRIC_ORDER, period_label
+
+    periods = list(session.exec(
+        select(FinancialPeriod)
+        .where(FinancialPeriod.company_id == company_id)
+        .order_by(FinancialPeriod.period_end.desc())  # type: ignore[attr-defined]
+        .limit(limit)
+    ).all())
+    if not periods:
+        return []
+
+    period_ids = [int(p.id or 0) for p in periods]
+    metrics = session.exec(
+        select(FinancialMetric).where(FinancialMetric.period_id.in_(period_ids))  # type: ignore[attr-defined]
+    ).all()
+    grouped: dict[int, list[FinancialMetric]] = {pid: [] for pid in period_ids}
+    for m in metrics:
+        grouped.setdefault(int(m.period_id), []).append(m)
+
+    rank = {name: i for i, name in enumerate(METRIC_ORDER)}
+    out: list[dict] = []
+    for p in periods:
+        rows = sorted(
+            grouped.get(int(p.id or 0), []),
+            key=lambda m: (rank.get(m.metric, len(rank)), m.metric),
+        )
+        raw_period = str(p.period)
+        label = (
+            period_label(p.period_end.isoformat())
+            if raw_period[:4].isdigit() and "-" in raw_period
+            else raw_period
+        )
+        out.append({
+            "period": label,
+            "period_end": p.period_end.isoformat(),
+            "report_type": p.report_type,
+            "metrics": {m.metric: _metric_entry(m.metric, m) for m in rows},
+        })
+    return out
+
+
+def _signal(
+    key: str, label: str, value_text: str, held: bool, impact: str, *,
+    adverse_when_held: bool = True,
+) -> dict:
+    """把「规则条件是否成立」渲染成一条可读信号。
+
+    ``tone`` 由**双向**决定，而不是只看条件是否成立：
+    「经营现金流不为正」不成立 = 现金流为正 = 好消息（绿），
+    而「现金流同比改善」不成立只是**没有好消息**（灰），不是坏消息。
+    """
+    if held:
+        tone = "bad" if adverse_when_held else "good"
+    else:
+        tone = "good" if adverse_when_held else "muted"
+    return {
+        "key": key,
+        "label": label,
+        "value_text": value_text,
+        "held": held,
+        "impact": impact,
+        "tone": tone,
+    }
+
+
+def financial_signals(facts) -> list[dict]:
+    """财务事实 → 可读信号列表。
+
+    ``key`` 与 :mod:`app.engine.rules` 里的规则键一致 ——
+    这样前端每一行都能追溯到「它对应 C4 / RISK 的哪条规则」，
+    而不是给一个无法核对的数字（规格 M6-03 可解释性）。
+
+    ★ ``impact`` 一律写成「影响哪个维度」这种**中性**陈述。
+    早先写成「推高 RISK」这种带方向的句子，当条件不成立（tone=绿）时
+    就变成了自相矛盾的显示 —— 方向必须只由 ``tone`` 表达。
+    """
+    proxy = "（代理值：每股经营现金流）" if facts.ocf_is_proxy else ""
+    return [
+        _signal(
+            "loss_years_gte_2", "连续亏损年数", f"{facts.loss_years} 年",
+            facts.loss_years >= 2, "影响「经营困境」C4",
+        ),
+        _signal(
+            "not_profitable", "近年盈利年数", f"{facts.profitable_years} 年",
+            facts.profitable_years == 0, "影响「经营困境」C4",
+        ),
+        _signal(
+            "ocf_not_positive", "最新经营现金流",
+            ("为正" if facts.ocf_positive else "不为正") + proxy,
+            not facts.ocf_positive, "影响「经营困境」C4、「风险」RISK",
+        ),
+        _signal(
+            "ocf_improving", "经营现金流同比",
+            ("改善" if facts.ocf_improving else "未改善") + proxy,
+            facts.ocf_improving, "改善可降低「风险」RISK",
+            adverse_when_held=False,
+        ),
+        _signal(
+            "margin_declining", "毛利率同比改善期数",
+            f"{facts.margin_improving_quarters} 期",
+            facts.margin_improving_quarters == 0, "影响「经营困境」C4",
+        ),
+        _signal(
+            "revenue_improving", "营收同比改善期数",
+            f"{facts.revenue_improving_quarters} 期",
+            facts.revenue_improving_quarters == 0, "影响「经营困境」C4",
+        ),
+        _signal(
+            "receivable_problem", "应收增速 vs 营收增速",
+            "应收增速更快" if facts.receivable_growth_exceeds_revenue else "未超过",
+            facts.receivable_growth_exceeds_revenue, "影响「风险」RISK",
+        ),
+        _signal(
+            "debt_ratio_rising", "资产负债率",
+            "在上升" if facts.debt_ratio_rising else "未上升",
+            facts.debt_ratio_rising, "影响「基本面」FUNDAMENTALS",
+        ),
+        _signal(
+            "one_off_attributed", "恶化是否已归因",
+            "已归因于一次性因素（按 INV-F1 不据此扣分）"
+            if facts.deteriorating_attributed_to_one_off else "未归因",
+            facts.deteriorating_attributed_to_one_off,
+            "决定 C4 是否扣分", adverse_when_held=False,
+        ),
+    ]
+
 __all__ = [
     "EVENT_LABELS",
     "RELIABILITY_NOTES",
@@ -374,6 +542,8 @@ __all__ = [
     "event_brief",
     "evidence_detail",
     "open_question_detail",
+    "financial_series",
+    "financial_signals",
     "opportunity_card",
     "score_breakdown",
     "strategy_detail",

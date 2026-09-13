@@ -4,6 +4,7 @@ import api, { ApiError } from '../api/client'
 import type { Evidence, OpportunityDetail, ScoreBreakdown as Breakdown } from '../api/types'
 import DisclaimerBanner from '../components/DisclaimerBanner'
 import EvidenceDrawer from '../components/EvidenceDrawer'
+import FinancialsPanel from '../components/FinancialsPanel'
 import ReliabilityTag from '../components/ReliabilityTag'
 import ScoreBreakdown from '../components/ScoreBreakdown'
 import StageBadge from '../components/StageBadge'
@@ -13,9 +14,9 @@ import Timeline from '../components/Timeline'
 /**
  * Opportunity Detail（M10-04 / 规格 §34.3 与 §45）。
  *
- * 页面顺序严格遵循规格 §45 的 7 步信息层级：
+ * 页面顺序遵循规格 §45 的 7 步信息层级，并补入「基本面数据」：
  *   ① 发生了什么 → ② 为什么重要 → ③ 为什么与我有关 → ④ 有什么证据
- *   → ⑤ 哪些地方还不确定 → ⑥ 风险是什么 → ⑦ 下一步看什么
+ *   → ⑤ 基本面数据 → ⑥ 哪些地方还不确定 → ⑦ 风险是什么 → ⑧ 下一步看什么
  *
  * 行情（K 线等）只作为最后的辅助信息层出现（规格 §46）。
  */
@@ -122,7 +123,7 @@ export function OpportunityPage() {
           <div className="text-xs text-status-pending font-semibold">⚑ 早期苗头 · 低确定性</div>
           <p className="mt-1 text-2xs text-muted leading-reading">
             该机会处于「{card.catalyst_stage?.split('｜')[1] ?? '早期'}」阶段。
-            这类信号的价值在于**提前量**：市场关注度低、可验证信息少，
+            这类信号的价值在于<b>提前量</b>：市场关注度低、可验证信息少，
             因此确定性显著低于「进展」与「完成」阶段的机会。
             请以「待确认」的心态阅读，并重点关注下方的失效条件 ——
             例如法院不受理、申请被撤回、或停牌后终止筹划。
@@ -228,7 +229,13 @@ export function OpportunityPage() {
         </ul>
       </section>
 
-      {/* ⑤ 哪些地方还不确定 —— ★ 规格 §24 的核心 */}
+      {/* ⑤ 基本面数据 —— 让「基本面扣分」可核对（P1-1） */}
+      <FinancialsPanel
+        financials={detail.financials ?? []}
+        signals={detail.financial_signals ?? []}
+      />
+
+      {/* ⑥ 哪些地方还不确定 —— ★ 规格 §24 的核心 */}
       <section className="panel p-3">
         <div className="label mb-2">等待确认的事项</div>
         <div className="grid sm:grid-cols-2 gap-3">
@@ -255,7 +262,7 @@ export function OpportunityPage() {
         </div>
       </section>
 
-      {/* ⑥ 风险是什么 —— 含反证 */}
+      {/* ⑦ 风险是什么 —— 含反证 */}
       <section className="panel p-3 space-y-3">
         <div>
           <div className="label mb-1.5">风险</div>
@@ -289,7 +296,7 @@ export function OpportunityPage() {
         )}
       </section>
 
-      {/* ⑦ 下一步看什么 */}
+      {/* ⑧ 下一步看什么 */}
       <section className="panel p-3">
         <div className="label mb-1.5">下一步观察什么</div>
         <ol className="space-y-0.5 text-xs text-muted">

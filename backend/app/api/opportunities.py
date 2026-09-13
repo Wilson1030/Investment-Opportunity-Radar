@@ -29,6 +29,7 @@ from app.models.enums import (
 )
 from app.models.evidence import Evidence
 from app.models.events import Event
+from app.pipeline.facts_builder import build_financial_facts
 from app.models.opportunity import (
     Opportunity,
     OpportunityScore,
@@ -190,6 +191,11 @@ def opportunity_detail(opportunity_id: int, session: Session = Depends(get_sessi
     )
     card["latest_events"] = [serializers.event_brief(e) for e in events[:5]]
 
+    # ★ 财务数据要能**解释**为什么 C4 / RISK 是这个分 —— 之前采了 80 期
+    # 却一个字段都不返回，用户看到「基本面扣分」却无从核对（P1-1）
+    company_id_int = int(opportunity.company_id)
+    financial_facts = build_financial_facts(session, company_id_int)
+
     return ok({
         "card": card,
         "thesis": _thesis_payload(thesis, evidence, contradictions),
@@ -211,6 +217,8 @@ def opportunity_detail(opportunity_id: int, session: Session = Depends(get_sessi
             for e in reversed(events)
         ],
         "evidence": [serializers.evidence_detail(e) for e in evidence],
+        "financials": serializers.financial_series(session, company_id_int),
+        "financial_signals": serializers.financial_signals(financial_facts),
         "news_clusters": [],
         # ★ 行情仅为辅助信息层（规格 §46），不是首页主体
         "market": {

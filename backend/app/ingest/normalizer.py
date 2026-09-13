@@ -210,7 +210,7 @@ def upsert_financials(
     """
     from datetime import date as _date
 
-    from app.ingest.financials import report_type_of
+    from app.ingest.financials import METRIC_UNITS, report_type_of
 
     written = 0
     for item in periods:
@@ -219,23 +219,29 @@ def upsert_financials(
         period_end = _date.fromisoformat(item.period_end)
         report_type = report_type_of(item.period_end)
 
+        # ★ 按 ``period_end`` 查找，而不是按 ``period`` 文本 ——
+        # ``period`` 的含义曾从「日期」修正为「报告期标签（2026H1）」，
+        # 若按文本查找，同一条记录会被当成新记录再插一遍，**历史数据翻倍**。
         row = session.exec(
             select(FinancialPeriod).where(
                 FinancialPeriod.company_id == company_id,
-                FinancialPeriod.period == item.period,
-                FinancialPeriod.report_type == report_type,
+                FinancialPeriod.period_end == period_end,
             )
         ).first()
         if row is None:
             row = FinancialPeriod(
                 company_id=company_id,
-                period=item.period,
+                period=item.label,
                 period_end=period_end,
                 report_type=report_type,
                 source_url=source_url,
             )
             session.add(row)
             session.flush()
+        else:
+            row.period = item.label
+            row.report_type = report_type
+            session.add(row)
         written += 1
 
         period_id = int(row.id or 0)
@@ -249,13 +255,16 @@ def upsert_financials(
                     FinancialMetric.metric == metric,
                 )
             ).first()
+            unit = METRIC_UNITS.get(metric)
             if existing is None:
                 session.add(FinancialMetric(
-                    period_id=period_id, metric=metric, value=value, yoy=yoy,
+                    period_id=period_id, metric=metric, value=value, unit=unit, yoy=yoy,
                 ))
             else:
                 existing.value = value
                 existing.yoy = yoy
+                # 单位以「当前口径」为准（历史行可能没有单位）
+                existing.unit = unit
                 session.add(existing)
 
     if commit:
