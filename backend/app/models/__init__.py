@@ -55,9 +55,8 @@ from app.models.profile import (
     InvestmentProfile,
     Investor,
     ProfileThesisWeight,
-    WatchlistItem,
 )
-from app.models.thesis import Thesis, ThesisInvalidationRule, ThesisTypeDef
+from app.models.thesis import Thesis
 
 __all__ = [
     # audit
@@ -90,11 +89,8 @@ __all__ = [
     "InvestmentProfile",
     "Investor",
     "ProfileThesisWeight",
-    "WatchlistItem",
     # thesis
     "Thesis",
-    "ThesisInvalidationRule",
-    "ThesisTypeDef",
     # enums
     "ALLOWED_STATUS_TRANSITIONS",
     "DIMENSION_LABELS",

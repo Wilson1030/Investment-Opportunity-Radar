@@ -19,7 +19,6 @@ from app.models.enums import ThesisType, EventType, OpportunityStatus, Reliabili
 from app.models.events import Event
 from app.models.knowledge import Company
 from app.models.opportunity import Opportunity
-from app.models.profile import WatchlistItem
 from app.strategies import STRATEGIES, get_strategy, validate_registry
 from app.strategies.base import NotImplementedStrategy
 from app.strategies.restructuring.rules import STRATEGY
@@ -187,18 +186,49 @@ def test_inv_p1_learned_weights_cannot_override_locked():
 
 
 # --------------------------------------------------------------------------- #
-# INV-W1：关注对象必须是 Opportunity（不允许只存 company_id）
+# INV-W1：关注对象必须绑定投资逻辑（不允许只存 company_id）
 # --------------------------------------------------------------------------- #
-def test_inv_w1_watchlist_requires_opportunity():
-    columns = WatchlistItem.__table__.columns  # type: ignore[attr-defined]
-    assert "opportunity_id" in columns
-    assert columns["opportunity_id"].nullable is False
+def test_inv_w1_opportunity_must_bind_a_thesis():
+    """★ 「关注」必须绑定 Thesis，不能只是一只股票。
+
+    规格 §21：不要保存成「自选股：ST XXX」，
+    而应保存成「**因为重组预期，所以关注 ST XXX**」。
+
+    ★ 这条原先断言在一张 ``watchlistitem`` 表上。那张表从未被任何代码写入过
+    （0 行、0 处写入）—— 因为「自选」这个概念本身就**被 Opportunity + Thesis
+    取代了**：机会天生带 thesis_id，而状态机的 TRACKING 就是「我在跟踪它」。
+
+    所以不变量没变、换了承载者：现在直接断言 Opportunity 上的约束。
+    保留一张没人写的表，只会让人以为存在一个「自选」功能。
+    """
+    from app.models.opportunity import Opportunity
+
+    columns = Opportunity.__table__.columns  # type: ignore[attr-defined]
+    assert "thesis_id" in columns, "机会必须绑定一条投资逻辑"
+    assert columns["thesis_id"].nullable is False, "不允许出现「没有逻辑」的关注"
+    assert "company_id" in columns, "公司仍然是机会的对象"
+
+    fks = {fk.target_fullname for fk in Opportunity.__table__.foreign_keys}  # type: ignore[attr-defined]
+    assert "thesis.id" in fks
+    assert "company.id" in fks
 
 
-def test_inv_w1_foreign_key_reference():
-    fks = {fk.target_fullname for fk in WatchlistItem.__table__.foreign_keys}  # type: ignore[attr-defined]
-    assert "opportunity.id" in fks
-    assert "investmentprofile.id" in fks
+def test_inv_w1_no_separate_watchlist_table():
+    """★ 不允许再出现第二套「关注」机制。
+
+    两套机制（自选表 + 状态机）就是「同一事实两个来源」——
+    用户在 A 处取消关注、B 处还挂着，而且两边都觉得自己是对的。
+    """
+    from sqlmodel import SQLModel
+
+    import app.models  # noqa: F401  —— 触发注册
+
+    table_names = set(SQLModel.metadata.tables)
+    for forbidden in ("watchlistitem", "thesistypedef", "thesisinvalidationrule"):
+        assert forbidden not in table_names, (
+            f"{forbidden} 又出现了 —— 它没有写入路径，"
+            "存在只会让人以为有这个功能"
+        )
 
 
 # --------------------------------------------------------------------------- #

@@ -74,19 +74,3 @@ class ProfileThesisWeight(SQLModel, table=True):
     updated_at: datetime = Field(default_factory=_utcnow)
 
 
-class WatchlistItem(SQLModel, table=True):
-    """自选 —— INV-W1：不允许只存 company_id。
-
-    关注对象必须是 Opportunity（即绑定 Thesis）。规格 §21：不要保存成
-    「自选股：ST XXX」，而应是「因为重组预期，所以关注 ST XXX」。
-    """
-
-    __table_args__ = (
-        UniqueConstraint("profile_id", "opportunity_id", name="uq_watchlist_item"),
-    )
-
-    id: int | None = Field(default=None, primary_key=True)
-    profile_id: int = Field(foreign_key="investmentprofile.id", index=True)
-    opportunity_id: int = Field(foreign_key="opportunity.id", index=True)
-    note: str | None = None
-    added_at: datetime = Field(default_factory=_utcnow)
