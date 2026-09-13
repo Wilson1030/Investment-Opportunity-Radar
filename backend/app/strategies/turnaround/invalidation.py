@@ -15,12 +15,11 @@ LLM 只负责产出事件，不得直接改状态（docs/03 §2.2）。
 
 from __future__ import annotations
 
-from app.engine import classifier
 from app.facts import EventFact, StrategyFacts
 from app.models.enums import EventType, InvalidationSeverity, ThesisType
 from app.strategies.base import InvalidationHit
 from app.strategies.registry import STRATEGIES
-from app.strategies.restructuring.invalidation import is_completion_driven_delisting
+from app.strategies.common.matcher import match_rule
 
 
 def rules() -> tuple:
@@ -47,35 +46,8 @@ def has_confirmed_improvement(facts: StrategyFacts) -> bool:
 
 
 def _matches(event: EventFact, definition) -> tuple[bool, str]:
-    """事件是否命中某条失效条件。"""
-    if event.event_type != definition.event_type:
-        return False, ""
-
-    title = event.title or ""
-
-    # 主体错位：子公司 / 控股股东自己的经营变化，不是母公司的反转
-    if classifier.subject_is_third_party(title):
-        return False, ""
-
-    # 「终止上市 + 换股吸收合并」是完成，不是失败
-    if is_completion_driven_delisting(title):
-        return False, ""
-
-    none_of = getattr(definition, "title_none_of", ())
-    if none_of and any(kw in title for kw in none_of):
-        return False, ""
-
-    all_of = getattr(definition, "title_all_of", ())
-    if all_of and not all(kw in title for kw in all_of):
-        return False, ""
-
-    if definition.title_contains:
-        hit_kw = [kw for kw in definition.title_contains if kw in title]
-        if not hit_kw:
-            return False, ""
-        return True, f"标题包含 {'/'.join(hit_kw)}"
-
-    return True, "事件类型匹配"
+    """单条规则匹配 —— 委托共享实现（``common.matcher.match_rule``）。"""
+    return match_rule(event, definition)
 
 
 def _financial_hits(facts: StrategyFacts) -> list[InvalidationHit]:

@@ -177,6 +177,36 @@ def subject_is_third_party(title: str) -> bool:
     return third_party_pos < process_pos
 
 
+#: 交易**成功导致的上市终止**：换股吸收合并 / 私有化 / 主动退市。
+#:
+#: ★ 为什么需要：``_TERMINATE_WORDS`` 里的裸词「终止」会命中「终止**上市**」，
+#: 而换股吸收合并里的「终止上市」讲的是**上市地位**，且是合并**成功**的结果。
+#: 实测东兴证券、信达证券的「连续停牌直至终止上市、实施换股吸收合并」
+#: 被判成「重组终止 / 重大资产重组失败」——判死方向完全反了。
+_COMPLETION_CONTEXT = (
+    "换股吸收合并", "吸收合并", "私有化", "主动退市", "要约收购",
+)
+
+#: 但「终止换股吸收合并」这类是**真的失败** —— 出现这些短语时前面的豁免不成立。
+#: 豁免必须能被推翻，否则会漏掉真实的交易终止。
+_DEAL_FAILURE_PHRASES = (
+    "终止换股吸收合并", "终止吸收合并", "吸收合并终止", "合并终止",
+    "终止筹划", "终止本次", "终止重组", "终止重大资产", "终止发行",
+)
+
+
+def is_completion_driven_delisting(title: str) -> bool:
+    """标题里的「终止」是否在讲「交易成功 → 上市地位终止」而非交易失败。
+
+    这是**确定性的标题模式识别**，与 ``subject_is_third_party`` 同类。
+    两处调用（事件层粗判 / 机会层权威判定）复用本函数，避免两份关键词漂移。
+    """
+    title = title or ""
+    if any(phrase in title for phrase in _DEAL_FAILURE_PHRASES):
+        return False
+    return any(marker in title for marker in _COMPLETION_CONTEXT)
+
+
 def is_post_deal(title: str) -> bool:
     """标题是否属于「重组已完成、只剩后续手续」的存量信息。"""
     return any(kw in (title or "") for kw in POST_DEAL_KEYWORDS)
@@ -239,6 +269,7 @@ def matched_keywords(title: str) -> dict[str, tuple[str, ...]]:
 
 
 __all__ = [
+    "is_completion_driven_delisting",
     "KEYWORD_RULES",
     "POST_DEAL_KEYWORDS",
     "is_non_restructuring",

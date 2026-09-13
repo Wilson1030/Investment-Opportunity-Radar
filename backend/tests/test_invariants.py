@@ -15,7 +15,7 @@ from sqlmodel import Session, select
 
 from app.engine import guard
 from app.facts import CompanyFacts, StrategyFacts
-from app.models.enums import EventType, OpportunityStatus, ReliabilityLevel, SourceType
+from app.models.enums import ThesisType, EventType, OpportunityStatus, ReliabilityLevel, SourceType
 from app.models.events import Event
 from app.models.knowledge import Company
 from app.models.opportunity import Opportunity
@@ -47,15 +47,23 @@ def test_inv_tt2_implemented_strategy_has_implementation():
     assert type(implementation).__name__ == "RestructuringStrategy"
 
 
-def test_inv_tt2_designed_strategy_raises_loudly():
-    """未实现的策略必须显式抛错，而不是返回「0 分机会」这种静默假结果。"""
-    designed = get_strategy("cycle")
-    assert isinstance(designed, NotImplementedStrategy)
-    with pytest.raises(NotImplementedError) as exc:
-        designed.evaluate(bare_facts())
-    assert "docs/06" in str(exc.value)
+def test_inv_tt2_placeholder_implementation_raises_loudly():
+    """INV-TT2：未实现的策略必须**显式抛错**，而不是返回「0 分机会」。
 
+    静默的假结果比明确的错误危险得多 —— 用户会以为「查过了、没机会」。
 
+    ★ 这条原先用 ``designed_types()`` 取一个真实存在的未实现策略。
+    10 类策略全部实现后没有这样的样本了，所以改为**直接构造**
+    一个占位实现来验证它的行为（约束本身没变，样本来源变了）。
+    """
+    placeholder = NotImplementedStrategy(ThesisType.RESTRUCTURING, "占位")
+    for call in (
+        lambda: placeholder.evaluate(bare_facts()),
+        lambda: placeholder.catalyst_strength(bare_facts()),
+        lambda: placeholder.invalidation_hits(bare_facts()),
+    ):
+        with pytest.raises((NotImplementedError, NotImplementedError)):
+            call()
 def test_registry_selfcheck_has_no_problems():
     assert validate_registry() == []
 

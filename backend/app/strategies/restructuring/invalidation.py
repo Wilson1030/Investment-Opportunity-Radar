@@ -6,7 +6,8 @@ LLM 只负责产出事件，不得直接改状态（docs/03 §2.2）。
 
 from __future__ import annotations
 
-from app.engine import classifier
+from app.engine.classifier import is_completion_driven_delisting
+from app.strategies.common.matcher import match_rule
 from app.facts import EventFact, StrategyFacts
 from app.models.enums import EventType, InvalidationSeverity, ThesisType
 from app.strategies.base import InvalidationHit
@@ -16,36 +17,6 @@ from app.strategies.registry import STRATEGIES
 def rules() -> tuple:
     """本策略的失效条件定义（来自注册表，单一事实来源）。"""
     return STRATEGIES[ThesisType.RESTRUCTURING].invalidating_events
-
-
-#: 交易**成功导致的上市终止**：换股吸收合并 / 私有化 / 主动退市。
-#:
-#: ★ 为什么需要：``_TERMINATE_WORDS`` 里的裸词「终止」会命中「终止**上市**」，
-#: 而换股吸收合并里的「终止上市」讲的是**上市地位**，且是合并**成功**的结果。
-#: 实测东兴证券、信达证券的「连续停牌直至终止上市、实施换股吸收合并」
-#: 被判成「重组终止 / 重大资产重组失败」——判死方向完全反了。
-_COMPLETION_CONTEXT = (
-    "换股吸收合并", "吸收合并", "私有化", "主动退市", "要约收购",
-)
-
-#: 但「终止换股吸收合并」这类是**真的失败** —— 出现这些短语时前面的豁免不成立。
-#: 豁免必须能被推翻，否则会漏掉真实的交易终止。
-_DEAL_FAILURE_PHRASES = (
-    "终止换股吸收合并", "终止吸收合并", "吸收合并终止", "合并终止",
-    "终止筹划", "终止本次", "终止重组", "终止重大资产", "终止发行",
-)
-
-
-def is_completion_driven_delisting(title: str) -> bool:
-    """标题里的「终止」是否在讲「交易成功 → 上市地位终止」而非交易失败。
-
-    这是**确定性的标题模式识别**，与 ``subject_is_third_party`` 同类。
-    两处调用（事件层粗判 / 机会层权威判定）复用本函数，避免两份关键词漂移。
-    """
-    title = title or ""
-    if any(phrase in title for phrase in _DEAL_FAILURE_PHRASES):
-        return False
-    return any(marker in title for marker in _COMPLETION_CONTEXT)
 
 
 #: 「已进入实质推进」的证据词 —— 出现它们说明不是早期苗头
@@ -68,47 +39,14 @@ def has_progress_evidence(facts: StrategyFacts) -> bool:
 
 
 def _matches(event: EventFact, definition) -> tuple[bool, str]:
-    """事件是否命中某条失效条件。"""
-    if event.event_type != definition.event_type:
-        return False, ""
+    """单条规则匹配 —— **委托共享实现**（``common.matcher.match_rule``）。
 
-    title = event.title or ""
-
-    # ★ 失效判定必须与正向信号用**同一套主体判定**。
-    #   否则会出现不对称：控股股东自己的重整被撤回不会给 C1 加分，
-    #   却足以把上市公司的卡片判死（实测三安光电）。
-    if classifier.subject_is_third_party(title):
-        return False, ""
-
-    # ★ 「终止上市 + 换股吸收合并」是完成，不是失败（实测东兴证券 / 信达证券）
-    if is_completion_driven_delisting(title):
-        return False, ""
-
-    # 排除词优先：命中任一排除词即不成立
-    none_of = getattr(definition, "title_none_of", ())
-    if none_of and any(kw in title for kw in none_of):
-        return False, ""
-
-    # AND 语义：标题必须同时包含全部关键词（应对「宣告公司破产」这类插词）
-    all_of = getattr(definition, "title_all_of", ())
-    if all_of and not all(kw in title for kw in all_of):
-        return False, ""
-
-    # 标题关键词（若定义了）
-    if definition.title_contains:
-        hit_kw = [kw for kw in definition.title_contains if kw in event.title]
-        if not hit_kw:
-            return False, ""
-        return True, f"标题包含 {'/'.join(hit_kw)}"
-
-    # 金额阈值（若定义了）
-    if definition.amount_ratio_gt is not None:
-        if event.amount_ratio > definition.amount_ratio_gt:
-            return True, f"金额占比 {event.amount_ratio:.2f} > {definition.amount_ratio_gt:.2f}"
-        return False, ""
-
-    # 只按事件类型匹配
-    return True, "事件类型匹配"
+    ★ 为什么这里不再自己写一份：本项目已经因为「同一个判定有两份实现」
+    出过两次事故（催化阶梯 vs 失效规则的关键词漂移；
+    主体判定在正向信号与失效判定之间不对称）。
+    所以规则匹配只保留一个执行点。
+    """
+    return match_rule(event, definition)
 
 
 def detect(facts: StrategyFacts) -> tuple[InvalidationHit, ...]:

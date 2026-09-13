@@ -38,11 +38,29 @@ def _register_implementations() -> None:
     """延迟导入实现类，避免 registry ↔ implementation 的循环依赖。"""
     if _IMPLEMENTATIONS:
         return
+    from app.strategies.cycle.rules import STRATEGY as cycle_strategy
+    from app.strategies.event_driven.rules import STRATEGY as event_driven_strategy
+    from app.strategies.growth.rules import STRATEGY as growth_strategy
+    from app.strategies.ma_integration.rules import STRATEGY as ma_integration_strategy
+    from app.strategies.policy.rules import STRATEGY as policy_strategy
+    from app.strategies.product.rules import STRATEGY as product_strategy
     from app.strategies.restructuring.rules import STRATEGY as restructuring_strategy
+    from app.strategies.shareholder_action.rules import STRATEGY as shareholder_action_strategy
     from app.strategies.turnaround.rules import STRATEGY as turnaround_strategy
+    from app.strategies.value.rules import STRATEGY as value_strategy
 
-    _IMPLEMENTATIONS[ThesisType.RESTRUCTURING] = restructuring_strategy
-    _IMPLEMENTATIONS[ThesisType.TURNAROUND] = turnaround_strategy
+    _IMPLEMENTATIONS.update({
+        ThesisType.RESTRUCTURING: restructuring_strategy,
+        ThesisType.TURNAROUND: turnaround_strategy,
+        ThesisType.EVENT_DRIVEN: event_driven_strategy,
+        ThesisType.MA_INTEGRATION: ma_integration_strategy,
+        ThesisType.SHAREHOLDER_ACTION: shareholder_action_strategy,
+        ThesisType.POLICY: policy_strategy,
+        ThesisType.CYCLE: cycle_strategy,
+        ThesisType.GROWTH: growth_strategy,
+        ThesisType.PRODUCT: product_strategy,
+        ThesisType.VALUE: value_strategy,
+    })
 
 
 def get_strategy(thesis_type: ThesisType | str) -> object:

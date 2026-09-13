@@ -14,8 +14,10 @@ from __future__ import annotations
 
 import pytest
 
-from app.strategies import get_def
+from app.models.enums import ThesisType
+from app.strategies import get_def, get_strategy
 from app.strategies.base import ConditionResult, StrategyEvaluation, NotImplementedStrategy
+from tests.conftest import bare_facts
 
 
 def test_coverage_cap_limits_result():
@@ -79,15 +81,36 @@ def test_policy_and_product_record_their_gating_in_design():
 
 
 @pytest.mark.parametrize("code", ["policy", "product"])
-def test_gating_semantics_are_testable_before_implementation(code):
-    """即使策略尚未实现，门控语义也必须可被单测锁住（避免实现时走样）。"""
-    from app.strategies import get_strategy
+def test_gating_is_now_implemented_per_spec(code):
+    """顺序门控的语义在**实现之后**依然成立（docs/06 §14.2）。
 
+    ★ 这条测试原来叫 ``test_gating_semantics_are_testable_before_implementation``，
+    断言的是「policy / product 还没实现，所以取到的是占位实现」——
+    那是**进度标注**，不是约束。两者都实现之后，该守的是门控本身：
+
+      · policy：缺业务验证（C5=0）时覆盖率被压到 0.45
+      · product：缺客户验证时订单 / 收入条件计 0
+    """
     implementation = get_strategy(code)
-    assert isinstance(implementation, NotImplementedStrategy)
-    # 机制层面已锁定（见上面的 StrategyEvaluation 测试），实现只需接入
-    definition = get_def(code)
-    assert definition.core_conditions[-1].key in {"C5", "C6"}
+    assert not isinstance(implementation, NotImplementedStrategy), (
+        f"{code} 已实现，不该再返回占位实现"
+    )
+
+    from app.pipeline.opportunity_builder import MIN_COVERAGE
+
+    evaluation = implementation.evaluate(bare_facts())
+    if code is ThesisType.POLICY:
+        assert evaluation.coverage_cap == pytest.approx(0.45), (
+            f"policy 缺业务验证时上限应为 0.45，实际 {evaluation.coverage_cap}"
+        )
+        assert evaluation.coverage <= 0.45
+    if code is ThesisType.PRODUCT:
+        # 缺客户验证 / 订单 / 收入时，这三条本身就该是低分或 0
+        by_key = {c.key: c for c in evaluation.conditions}
+        assert by_key["C3"].satisfaction <= 0.20
+        assert by_key["C4"].satisfaction <= 0.15
+        assert by_key["C5"].satisfaction == 0.0
+        assert evaluation.coverage < MIN_COVERAGE
 
 
 def test_funnel_reports_where_it_dropped():

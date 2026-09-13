@@ -43,9 +43,11 @@ def test_health_reports_selfcheck_and_degradation(client):
     #   这里守的是**两个来源必须一致**：health 报告的名单 == registry 的声明。
     from app.strategies import implemented_types, designed_types
 
-    assert data["strategies"]["implemented"] == sorted(
+    # health 按 **ThesisType 枚举顺序**返回（与 /api/strategies 一致），
+    # 不是字母序 —— 这里比对集合，顺序由 test_strategies_endpoint 单独守。
+    assert set(data["strategies"]["implemented"]) == {
         c.value for c in implemented_types()
-    ), "health 报告的已实现策略与 registry 不一致"
+    }, "health 报告的已实现策略与 registry 不一致"
     assert len(data["strategies"]["designed"]) == len(designed_types())
     assert ThesisType.RESTRUCTURING.value in data["strategies"]["implemented"]
     assert ThesisType.TURNAROUND.value in data["strategies"]["implemented"]

@@ -61,8 +61,25 @@ def test_funnel_reports_where_it_dropped(pipeline_outcome):
     assert funnel.announcements_fetched == 8
     assert funnel.events_extracted == 8
     assert funnel.cards == 3
-    # 5 事件 → 2 机会：提示应指向这一级，而不是无关的分支计数
-    assert funnel.drop_at() == "events_extracted → thesis_candidates"
+
+    # ★ 「提示指向掉得最狠的一级」——验证**机制**，不写死是哪一级。
+    #
+    # 原先这里写死 ``"events_extracted → thesis_candidates"``。
+    # 实现全部 10 类策略后，4 家公司都至少命中一个策略，
+    # 瓶颈从「策略命中」下移到「建卡门槛」，写死的字符串就失效了 ——
+    # 但它真正要守的（提示指向最窄的那一级）没变。
+    from app.engine.funnel import FunnelCounters
+
+    chain = FunnelCounters.SEQUENTIAL_CHAIN
+    ratios = [
+        (f"{a} → {b}", getattr(funnel, b) / getattr(funnel, a))
+        for a, b in zip(chain, chain[1:])
+        if getattr(funnel, a) > 0
+    ]
+    worst_level = min(ratios, key=lambda kv: kv[1])[0]
+    assert funnel.drop_at().startswith(worst_level), (
+        f"drop_at 指向 {funnel.drop_at()}，但保留率最低的是 {worst_level}"
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -105,7 +122,7 @@ def test_pipeline_evaluates_every_implemented_strategy(pipeline_outcome):
     expected = {code.value for code in implemented_types()}
     evaluated = {r.thesis_type for r in pipeline_outcome.opportunities}
     assert expected <= evaluated, f"这些策略没有被遍历：{expected - evaluated}"
-    assert expected == {"restructuring", "turnaround"}
+    assert len(expected) == 10, f"应有 10 类策略参与遍历，实际 {len(expected)}"
 
 
 def test_healthy_case_is_pending_confirmation(pipeline_outcome):
@@ -496,14 +513,20 @@ def test_second_run_does_not_duplicate_alerts(pipeline_outcome, engine):
 # 画像门槛（规格 §5.7 / §5.8）
 # --------------------------------------------------------------------------- #
 def test_match_score_scales_with_profile_weight(pipeline_outcome, engine):
-    """调整画像权重 → 匹配度与机会分随之变化（不是所有用户看到同一个 Dashboard）。"""
-    from app.pipeline import profile_seed
+    """调整画像权重 → 匹配度与机会分随之变化（不是所有用户看到同一个 Dashboard）。
 
+    ★ 断言必须**按策略过滤**：把 restructuring 的权重清零，
+    说明的是「这个画像不关注重组」，而不是「这家公司没有任何机会」——
+    另外 9 类策略照样可以建卡（实测 ST XXX 在零重组权重下
+    仍会被其它策略命中，所以对全部结果断言 «都不建卡» 是错的）。
+    """
     from app.models.profile import ProfileThesisWeight
+    from app.strategies import implemented_types
+    from app.pipeline import profile_seed
+    from app.pipeline.opportunity_builder import build_opportunities
 
     with Session(engine) as s:
         profile = profile_seed.get_or_create_default_profile(s, template=None)
-        # 显式把重组权重清零（套用模板是「合并」语义，不会移除既有项）
         row = s.exec(
             select(ProfileThesisWeight).where(
                 ProfileThesisWeight.profile_id == profile.id,
@@ -517,15 +540,22 @@ def test_match_score_scales_with_profile_weight(pipeline_outcome, engine):
         weights = profile_seed.profile_weights(s, int(profile.id or 0))
         assert weights.get("restructuring", 0) == 0.0
 
-        from app.pipeline.opportunity_builder import build_opportunities
-
         company = s.exec(select(Company).where(Company.name == "ST XXX")).first()
         results = build_opportunities(s, int(company.id), int(profile.id), weights, commit=True)
 
-    assert all(not r.created for r in results), "画像与重组无关时不应产出重组机会卡"
-    assert all("相关性不足" in r.reason or "逻辑强度不足" in r.reason for r in results)
-
-
+    restructuring = [r for r in results if r.thesis_type == "restructuring"]
+    assert restructuring, "重组策略应当仍被评估（只是权重为 0）"
+    assert all(not r.created for r in restructuring), (
+        "画像与重组无关时不应产出重组机会卡"
+    )
+    assert all(
+        "相关性不足" in (r.reason or "") or "逻辑强度不足" in (r.reason or "")
+        for r in restructuring
+    )
+    # 其它策略不受这次权重调整的影响（各自按自己的权重判定）
+    assert {r.thesis_type for r in results} == {
+        c.value for c in implemented_types()
+    }
 def test_zero_weight_strategy_gets_zero_match(pipeline_outcome):
     """画像里没配置的策略 → 权重比 0 → 匹配度 0 → 被门槛挡住。"""
     from app.engine.scoring import compute_match_score, profile_weight_ratio
