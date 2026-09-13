@@ -139,11 +139,53 @@ export function OpportunityPage() {
         </div>
       )}
 
-      {/* ② 为什么重要 —— 投资 Thesis */}
+      {/* ── 操作栏（不占 7 步编号：它不是阅读内容，但必须显眼）── */}
+      <ActionBar
+        opportunityId={opportunityId}
+        status={detail.card.status}
+        onDone={reload}
+      />
+
+      {/* ① 发生了什么 —— 事件时间线 + 相关报道 */}
+      <section className="panel p-3">
+        <div className="label mb-2">① 发生了什么</div>
+        <Timeline items={detail.timeline} onOpenEvidence={openEvidence} />
+      </section>
+
+      {/* ① 发生了什么（续）—— 相关报道（规格 §42/§43：N 条报道归成一簇） */}
+      {detail.news_clusters.length > 0 && (
+        <section className="panel p-3 space-y-2">
+          <div className="label">相关报道（属于「发生了什么」）</div>
+          {detail.news_clusters.map((cluster) => (
+            <div key={cluster.id} className="space-y-1">
+              <div className="flex items-baseline justify-between text-xs">
+                <span>{cluster.label}</span>
+                {cluster.last_seen && (
+                  <span className="num text-2xs text-faint">
+                    最近 {cluster.last_seen.slice(0, 16).replace('T', ' ')}
+                  </span>
+                )}
+              </div>
+              <ul className="space-y-0.5 text-2xs text-muted">
+                {cluster.key_points.map((point) => (
+                  <li key={point} className="border-l-2 border-border pl-2">
+                    {point}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
+          <p className="text-2xs text-faint">
+            要点为<b>真实标题</b>（去近重复后的代表条目），不是模型概括 —— 便于你直接核对。
+          </p>
+        </section>
+      )}
+
+      {/* ② 为什么重要 —— 投资 Thesis + 失效条件 + AI 判断 */}
       {thesis && (
         <section className="panel p-3 space-y-3">
           <div>
-            <div className="label mb-1">投资 Thesis（为什么关注它）</div>
+            <div className="label mb-1">② 为什么重要（投资 Thesis）</div>
             <p className="text-sm leading-reading">{thesis.statement}</p>
           </div>
 
@@ -184,51 +226,47 @@ export function OpportunityPage() {
               ))}
             </ul>
           </div>
+
+          <div className="hairline" />
+
+          {/* ★ AI 判断 —— 规格 §44：AI 负责解释，不替用户决策。
+              放在 ② 之内：它就是「为什么重要」的另一种说法，
+              但必须与规则生成的投资 Thesis **视觉上分开**，
+              否则用户无法分辨哪句可核对。 */}
+          <div>
+            <div className="flex items-baseline justify-between mb-1.5">
+              <span className="label">AI 判断（模型生成，可出错）</span>
+              <span className="text-2xs text-faint">上方投资 Thesis 由规则生成，可核对</span>
+            </div>
+            <AiJudgement
+              summary={detail.card.ai_judgement}
+              ruleScore={detail.card.rule_score}
+              semanticScore={detail.card.semantic_score}
+              divergence={detail.card.divergence}
+              divergenceFlagged={detail.card.divergence_flagged}
+            />
+          </div>
         </section>
       )}
 
-      {/* ①b 我可以做什么 —— 状态机的合法迁移直接变成按钮 */}
-      <ActionBar
-        opportunityId={opportunityId}
-        status={detail.card.status}
-        onDone={reload}
-      />
-
-      {/* ②b AI 判断 —— 规格 §44：AI 负责解释，不替用户决策 */}
-      <section className="panel p-3 space-y-2">
-        <div className="flex items-baseline justify-between">
-          <div className="label">AI 判断</div>
-          <span className="text-2xs text-faint">
-            由模型生成（可出错）—— 与上面的投资 Thesis 分开呈现，便于分辨哪句可核对
-          </span>
-        </div>
-        <AiJudgement
-          summary={detail.card.ai_judgement}
-          ruleScore={detail.card.rule_score}
-          semanticScore={detail.card.semantic_score}
-          divergence={detail.card.divergence}
-          divergenceFlagged={detail.card.divergence_flagged}
-        />
-      </section>
-
-      {/* ③ 为什么与我有关 —— 评分拆解 */}
+      {/* ③ 为什么与我有关 —— 评分拆解 + 基本面数据（评分的事实依据） */}
       {breakdown && (
         <section>
-          <div className="label mb-1.5 px-1">为什么是 {breakdown.rule_score?.toFixed(0)}（点击展开逐项）</div>
+          <div className="label mb-1.5 px-1">③ 为什么是 {breakdown.rule_score?.toFixed(0)}（点击展开逐项）</div>
           <ScoreBreakdown breakdown={breakdown} onOpenEvidence={openEvidence} />
         </section>
       )}
 
-      {/* ① 发生了什么 —— 事件时间线 */}
-      <section className="panel p-3">
-        <div className="label mb-2">事件时间线</div>
-        <Timeline items={detail.timeline} onOpenEvidence={openEvidence} />
-      </section>
-
+      {/* ③（续）—— 基本面数据：让「基本面扣分」可核对（P1-1） */}
+      <FinancialsPanel
+        title="③（续）基本面数据 —— 上面扣分 / 加分的事实依据"
+        financials={detail.financials ?? []}
+        signals={detail.financial_signals ?? []}
+      />
       {/* ④ 有什么证据 */}
       <section className="panel p-3">
         <div className="flex items-center justify-between mb-2">
-          <span className="label">证据（{allEvidence.length} 条）</span>
+          <span className="label">④ 有什么证据（{allEvidence.length} 条）</span>
           <button type="button" className="btn" onClick={() => openEvidence([])}>
             打开证据抽屉
           </button>
@@ -261,44 +299,9 @@ export function OpportunityPage() {
         </ul>
       </section>
 
-      {/* ④b 新闻聚类 —— 规格 §42/§43：N 条报道归成一簇，不是 N 张重复卡片 */}
-      {detail.news_clusters.length > 0 && (
-        <section className="panel p-3 space-y-2">
-          <div className="label">相关报道</div>
-          {detail.news_clusters.map((cluster) => (
-            <div key={cluster.id} className="space-y-1">
-              <div className="flex items-baseline justify-between text-xs">
-                <span>{cluster.label}</span>
-                {cluster.last_seen && (
-                  <span className="num text-2xs text-faint">
-                    最近 {cluster.last_seen.slice(0, 16).replace('T', ' ')}
-                  </span>
-                )}
-              </div>
-              <ul className="space-y-0.5 text-2xs text-muted">
-                {cluster.key_points.map((point) => (
-                  <li key={point} className="border-l-2 border-border pl-2">
-                    {point}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          ))}
-          <p className="text-2xs text-faint">
-            要点为<b>真实标题</b>（去近重复后的代表条目），不是模型概括 —— 便于你直接核对。
-          </p>
-        </section>
-      )}
-
-      {/* ⑤ 基本面数据 —— 让「基本面扣分」可核对（P1-1） */}
-      <FinancialsPanel
-        financials={detail.financials ?? []}
-        signals={detail.financial_signals ?? []}
-      />
-
-      {/* ⑥ 哪些地方还不确定 —— ★ 规格 §24 的核心 */}
+      {/* ⑤ 哪些地方还不确定 —— ★ 规格 §24 的核心 */}
       <section className="panel p-3">
-        <div className="label mb-2">等待确认的事项</div>
+        <div className="label mb-2">⑤ 哪些地方还不确定（等待确认的事项）</div>
         <div className="grid sm:grid-cols-2 gap-3">
           <div>
             <div className="text-2xs text-reliability-a mb-1">✓ 已确认</div>
@@ -323,10 +326,10 @@ export function OpportunityPage() {
         </div>
       </section>
 
-      {/* ⑦ 风险是什么 —— 含反证 */}
+      {/* ⑥ 风险是什么 —— 含反证 */}
       <section className="panel p-3 space-y-3">
         <div>
-          <div className="label mb-1.5">风险</div>
+          <div className="label mb-1.5">⑥ 风险是什么</div>
           <ul className="space-y-1 text-xs">
             {detail.risks.map((risk) => (
               <li key={risk.factor} className="flex items-start gap-2">
@@ -357,9 +360,9 @@ export function OpportunityPage() {
         )}
       </section>
 
-      {/* ⑧ 下一步看什么 */}
+      {/* ⑦ 下一步看什么 */}
       <section className="panel p-3">
-        <div className="label mb-1.5">下一步观察什么</div>
+        <div className="label mb-1.5">⑦ 下一步看什么</div>
         <ol className="space-y-0.5 text-xs text-muted">
           {detail.next_events_to_watch.map((item, index) => (
             <li key={item}>

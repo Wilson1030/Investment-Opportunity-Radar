@@ -18,11 +18,7 @@ export function RadarPage() {
   const [radar, setRadar] = useState<RadarPayload | null>(null)
   const [offline, setOffline] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [busy, setBusy] = useState(false)
   const [thesisFilter, setThesisFilter] = useState<string | null>(null)
-  /** 操作结果反馈 —— 按钮必须让用户看到「确实做了什么」 */
-  const [notice, setNotice] = useState<string | null>(null)
-  const [actionError, setActionError] = useState<string | null>(null)
 
   const load = useCallback(
     (filter: string | null) =>
@@ -38,24 +34,6 @@ export function RadarPage() {
       setError(err instanceof ApiError ? err.message : String(err)),
     )
   }, [load])
-
-  const handleAction = async (id: number, action: string) => {
-    setBusy(true)
-    setNotice(null)
-    setActionError(null)
-    try {
-      const result = await api.recordAction(id, action, [])
-      // ★ 把**实际发生了什么**告诉用户：
-      //   原先只刷新列表，状态没变时看起来像按钮没反应（用户以为它是摆设）。
-      const payload = result as { data?: { message?: string } } | undefined
-      setNotice(payload?.data?.message ?? '已记录')
-      await load(thesisFilter)
-    } catch (err) {
-      setActionError(err instanceof ApiError ? err.message : String(err))
-    } finally {
-      setBusy(false)
-    }
-  }
 
   const handleFilter = async (next: string | null) => {
     setThesisFilter(next)
@@ -140,17 +118,6 @@ export function RadarPage() {
         />
       )}
 
-      {/* 操作反馈：按钮必须让用户看到效果 */}
-      {notice && (
-        <div className="panel border-accent-dim/50 bg-accent/5 p-2 text-2xs text-accent">
-          {notice}
-        </div>
-      )}
-      {actionError && (
-        <div className="panel border-status-invalid/50 p-2 text-2xs text-status-invalid">
-          {actionError}
-        </div>
-      )}
 
       {/* 今日机会 */}
       <section>
@@ -188,8 +155,7 @@ export function RadarPage() {
               <OpportunityCard
                 key={card.id}
                 card={card}
-                busy={busy}
-                onAction={(action) => handleAction(card.id, action)}
+                onActionDone={() => load(thesisFilter)}
               />
             ))}
           </div>

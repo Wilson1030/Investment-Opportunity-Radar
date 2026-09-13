@@ -123,7 +123,7 @@ export const api = {
       }),
     }),
 
-  health: () => request<Record<string, unknown>>('/health'),
+  health: () => request<{ status_machine?: Record<string, string[]> }>('/health'),
 
   radar: (thesisType?: string | null) =>
     requestOrFixture<RadarPayload>(

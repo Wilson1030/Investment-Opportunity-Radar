@@ -59,9 +59,12 @@ function yoyText(yoy: number | null): { text: string; cls: string } {
 export function FinancialsPanel({
   financials,
   signals,
+  title = '基本面数据',
 }: {
   financials: FinancialPeriod[]
   signals: FinancialSignal[]
+  /** 标题可定制：在详情页里它是 ③（为什么与我有关）的**事实依据** */
+  title?: string
 }) {
   const periods = financials.slice(0, MAX_PERIODS)
   const proxySignal = signals.find((s) => s.key === 'ocf_not_positive' && s.value_text.includes('代理值'))
@@ -69,7 +72,7 @@ export function FinancialsPanel({
   if (financials.length === 0 && signals.length === 0) {
     return (
       <section className="panel p-3 border-dashed">
-        <div className="label mb-1">基本面数据</div>
+        <div className="label mb-1">{title}</div>
         <p className="text-2xs text-faint">
           未采集到结构化财务数据 —— 因此本卡的「经营困境 C4」「基本面」「风险 RISK」
           三个维度缺少依据。<b>缺失就是不显示，不用估算值填充。</b>
@@ -81,7 +84,7 @@ export function FinancialsPanel({
   return (
     <section className="panel p-3 space-y-3">
       <div className="flex items-baseline justify-between">
-        <div className="label">基本面数据</div>
+        <div className="label">{title}</div>
         <span className="text-2xs text-faint">
           {financials.length > 0 && `共 ${financials.length} 个报告期`}
         </span>

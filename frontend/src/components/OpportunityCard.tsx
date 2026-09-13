@@ -1,6 +1,7 @@
 import { Link } from 'react-router-dom'
 import type { OpportunityCard as Card } from '../api/types'
 import AiJudgement from './AiJudgement'
+import CardActions from './CardActions'
 import FreshnessTag from './FreshnessTag'
 import StageBadge from './StageBadge'
 import StatusBadge from './StatusBadge'
@@ -14,12 +15,11 @@ import StatusBadge from './StatusBadge'
  */
 export function OpportunityCard({
   card,
-  onAction,
-  busy = false,
+  onActionDone,
 }: {
   card: Card
-  onAction?: (action: 'viewed' | 'confirmed' | 'ignored' | 'tracked') => void
-  busy?: boolean
+  /** 操作完成后刷新列表（状态与按钮随之更新） */
+  onActionDone: () => void | Promise<void>
 }) {
   return (
     <article className="panel">
@@ -153,20 +153,16 @@ export function OpportunityCard({
         </>
       )}
 
-      {/* ★ M9-01：卡片操作 ≤ 4 个 */}
-      <footer className="hairline flex items-center gap-2 p-3">
-        <Link to={`/opportunities/${card.id}`} className="btn-primary">
-          查看证据与研究卡
-        </Link>
-        <button className="btn" disabled={busy} onClick={() => onAction?.('confirmed')}>
-          确认关注
-        </button>
-        <button className="btn" disabled={busy} onClick={() => onAction?.('tracked')}>
-          加入跟踪
-        </button>
-        <button className="btn" disabled={busy} onClick={() => onAction?.('ignored')}>
-          暂时忽略
-        </button>
+      {/* ★ M9-01：卡片操作 ≤ 4 个（链接 + 至多 3 个操作）
+          ★ 按钮**随状态变化** —— 关注之后会变成「取消关注」。
+            原先三个按钮写死，点完一个字都不变，用户看不出操作生效了。 */}
+      <footer className="hairline p-3 space-y-2">
+        <div className="flex items-center gap-2">
+          <Link to={`/opportunities/${card.id}`} className="btn-primary">
+            查看证据与研究卡
+          </Link>
+        </div>
+        <CardActions opportunityId={card.id} status={card.status} onDone={onActionDone} />
       </footer>
     </article>
   )
