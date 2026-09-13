@@ -66,8 +66,11 @@ def test_invalidated_cannot_jump_to_confirmed_or_observing():
     [
         (OpportunityStatus.DISCOVERED, OpportunityStatus.THESIS_CONFIRMED),
         (OpportunityStatus.DISCOVERED, OpportunityStatus.TRACKING),
-        (OpportunityStatus.ARCHIVED, OpportunityStatus.TRACKING),
+        # 注意：``ARCHIVED → TRACKING`` 现在是**合法**的（见下方
+        # ``test_archived_is_reversible``）——「暂时忽略」必须真的暂时。
         (OpportunityStatus.ARCHIVED, OpportunityStatus.DISCOVERED),
+        (OpportunityStatus.ARCHIVED, OpportunityStatus.THESIS_CONFIRMED),
+        (OpportunityStatus.ARCHIVED, OpportunityStatus.OBSERVING),
         (OpportunityStatus.THESIS_CONFIRMED, OpportunityStatus.PENDING_CONFIRMATION),
     ],
 )
@@ -91,10 +94,31 @@ def test_no_status_is_unreachable():
     assert reachable == set(OpportunityStatus)
 
 
-def test_archived_is_terminal():
-    assert ALLOWED_STATUS_TRANSITIONS[OpportunityStatus.ARCHIVED] == set()
-    with pytest.raises(guard.InvariantViolation):
-        guard.check_status_transition(OpportunityStatus.ARCHIVED, OpportunityStatus.OBSERVING)
+def test_archived_is_reversible_but_not_a_shortcut():
+    """★ 归档必须**可撤销** —— 因为 UI 上的按钮叫「**暂时**忽略」。
+
+    原先 ``ARCHIVED: set()`` 是死胡同：用户点错一次就再也回不来，
+    只能去改数据库。**「暂时」是一个承诺，状态机必须兑现它。**
+
+    但也不能变成捷径：归档过的机会不能直接跳到「已确认 / 观察中」——
+    那等于跳过确认流程，把「我曾经不想看它」这件事抹掉。
+    """
+    allowed = ALLOWED_STATUS_TRANSITIONS[OpportunityStatus.ARCHIVED]
+    assert allowed == {
+        OpportunityStatus.PENDING_CONFIRMATION,
+        OpportunityStatus.TRACKING,
+    }, "归档只应回到「待确认 / 跟踪」"
+
+    guard.check_status_transition(
+        OpportunityStatus.ARCHIVED, OpportunityStatus.TRACKING
+    )
+    guard.check_status_transition(
+        OpportunityStatus.ARCHIVED, OpportunityStatus.PENDING_CONFIRMATION
+    )
+    for shortcut in (OpportunityStatus.THESIS_CONFIRMED, OpportunityStatus.OBSERVING,
+                     OpportunityStatus.DISCOVERED):
+        with pytest.raises(guard.InvariantViolation):
+            guard.check_status_transition(OpportunityStatus.ARCHIVED, shortcut)
 
 
 # --------------------------------------------------------------------------- #

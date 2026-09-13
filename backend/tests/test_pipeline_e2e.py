@@ -60,7 +60,12 @@ def test_funnel_reports_where_it_dropped(pipeline_outcome):
     assert funnel.candidates == 4
     assert funnel.announcements_fetched == 8
     assert funnel.events_extracted == 8
-    assert funnel.cards == 3
+    # ★ 不再写死 3：默认画像「全景均衡」覆盖 10 类策略后，
+    #   同一批 mock 公司会命中更多策略。断言改为「与实际结果一致」——
+    #   写死数字的测试在画像/策略变化时必然失效，而它要守的是
+    #   「漏斗如实反映落库的卡片数」。
+    created_count = sum(1 for r in pipeline_outcome.opportunities if r.created)
+    assert funnel.cards == created_count
 
     # ★ 「提示指向掉得最狠的一级」——验证**机制**，不写死是哪一级。
     #
@@ -592,10 +597,19 @@ def test_quality_metrics_expose_r3_verdict(pipeline_outcome):
 # --------------------------------------------------------------------------- #
 @pytest.fixture()
 def parallel_outcome(session, engine):
-    """同一场景，但抽取阶段用 2 个线程。"""
+    """同一场景，但抽取阶段用 2 个线程。
+
+    ★ 与 ``pipeline_outcome`` 一样显式固定画像为「重组猎手」——
+    这条测试比对的是「并发与串行的结果是否逐项一致」，
+    不该因为默认画像覆盖了 10 类策略而改变卡片数量。
+    """
+    from app.pipeline import profile_seed
     from app.pipeline.runner import PipelineOptions, run_pipeline
 
     del session
+    with Session(engine) as s:
+        profile = profile_seed.get_or_create_default_profile(s, template=None)
+        profile_seed.apply_template(s, profile, "重组猎手")
     return run_pipeline(PipelineOptions(
         source="mock", stage="full", limit=None, extract_workers=2
     ))

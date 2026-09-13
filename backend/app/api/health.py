@@ -8,6 +8,7 @@ from sqlmodel import Session
 from app.api.deps import get_session
 from app.api.envelope import ok
 from app.config import settings
+from app.models.enums import ALLOWED_STATUS_TRANSITIONS
 from app.db import engine
 from app.scheduler.jobs import describe as describe_scheduler
 from app.strategies import implementation_status, validate_registry
@@ -50,6 +51,16 @@ def _health_payload(session: Session) -> dict:
         "strategies": {
             "implemented": [c.value for c, s in status_map.items() if s.value == "implemented"],
             "designed": [c.value for c, s in status_map.items() if s.value != "implemented"],
+        },
+        # ★ 状态机由后端提供，**前端不再复制一份**。
+        #
+        # 踩过的坑：前端操作栏一开始自己写了一张「当前状态下哪些操作合法」的表。
+        # 那种复制一旦与后端漂移，用户点下去只会得到一个 4xx 报错，
+        # 而界面还会一直显示那个不合法的按钮。
+        # 现在前端从本字段读，合法性与后端天然一致。
+        "status_machine": {
+            status.value: sorted(t.value for t in targets)
+            for status, targets in ALLOWED_STATUS_TRANSITIONS.items()
         },
         "registry_problems": registry_problems,
         "ingest": {

@@ -1,9 +1,10 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import api, { ApiError } from '../api/client'
 import type { RadarPayload } from '../api/types'
 import DisclaimerBanner from '../components/DisclaimerBanner'
 import OpportunityCard from '../components/OpportunityCard'
+import StrategyPanel from '../components/StrategyPanel'
 import { StatusBadge } from '../components/StatusBadge'
 
 /**
@@ -17,28 +18,51 @@ export function RadarPage() {
   const [offline, setOffline] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [thesisFilter, setThesisFilter] = useState<string | null>(null)
+  /** 操作结果反馈 —— 按钮必须让用户看到「确实做了什么」 */
+  const [notice, setNotice] = useState<string | null>(null)
+  const [actionError, setActionError] = useState<string | null>(null)
 
-  useEffect(() => {
-    api
-      .radar()
-      .then(({ data, meta }) => {
+  const load = useCallback(
+    (filter: string | null) =>
+      api.radar(filter).then(({ data, meta }) => {
         setRadar(data)
         setOffline(meta.offline)
-      })
-      .catch((err: unknown) => setError(err instanceof ApiError ? err.message : String(err)))
-  }, [])
+      }),
+    [],
+  )
+
+  useEffect(() => {
+    load(null).catch((err: unknown) =>
+      setError(err instanceof ApiError ? err.message : String(err)),
+    )
+  }, [load])
 
   const handleAction = async (id: number, action: string) => {
     setBusy(true)
+    setNotice(null)
+    setActionError(null)
     try {
-      await api.recordAction(id, action, [])
-      const { data, meta } = await api.radar()
-      setRadar(data)
-      setOffline(meta.offline)
+      const result = await api.recordAction(id, action, [])
+      // ★ 把**实际发生了什么**告诉用户：
+      //   原先只刷新列表，状态没变时看起来像按钮没反应（用户以为它是摆设）。
+      const payload = result as { data?: { message?: string } } | undefined
+      setNotice(payload?.data?.message ?? '已记录')
+      await load(thesisFilter)
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : String(err))
+      setActionError(err instanceof ApiError ? err.message : String(err))
     } finally {
       setBusy(false)
+    }
+  }
+
+  const handleFilter = async (next: string | null) => {
+    setThesisFilter(next)
+    setError(null)
+    try {
+      await load(next)
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : String(err))
     }
   }
 
@@ -96,6 +120,27 @@ export function RadarPage() {
         </div>
       </section>
 
+      {/* 策略全景 —— 每类逻辑都要有交代 */}
+      {radar.strategies.length > 0 && (
+        <StrategyPanel
+          overview={radar.strategies}
+          active={thesisFilter}
+          onSelect={handleFilter}
+        />
+      )}
+
+      {/* 操作反馈：按钮必须让用户看到效果 */}
+      {notice && (
+        <div className="panel border-accent-dim/50 bg-accent/5 p-2 text-2xs text-accent">
+          {notice}
+        </div>
+      )}
+      {actionError && (
+        <div className="panel border-status-invalid/50 p-2 text-2xs text-status-invalid">
+          {actionError}
+        </div>
+      )}
+
       {/* 今日机会 */}
       <section>
         <header className="flex items-center justify-between px-1 mb-2">
@@ -113,7 +158,9 @@ export function RadarPage() {
 
         {radar.today.cards.length === 0 ? (
           <div className="panel p-4 text-xs text-faint leading-relaxed">
-            今日暂无机会卡。
+            {thesisFilter
+              ? '该类投资逻辑当前没有机会卡（上方策略全景里有原因）。'
+              : '今日暂无机会卡。'}
             {radar.pipeline.hint && (
               <>
                 <br />

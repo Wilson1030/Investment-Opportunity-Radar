@@ -16,7 +16,11 @@ from app.strategies import STRATEGY_TEMPLATES
 #: MVP 固定单用户
 DEFAULT_HANDLE = "owner"
 #: 默认套用「重组猎手」模板 —— 与第一个实现的策略一致（D13）
-DEFAULT_TEMPLATE = "重组猎手"
+#: 默认模板：**全景均衡**（覆盖全部 10 类策略）。
+#:
+#: ★ 不用专项模板（如「重组猎手」）当默认 —— 那样另外 5 类策略
+#: 因权重为 0 而永远出不了卡，用户会以为它们没实现。
+DEFAULT_TEMPLATE = "全景均衡"
 
 
 def get_or_create_default_profile(

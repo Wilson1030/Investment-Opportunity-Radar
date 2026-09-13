@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import api, { ApiError } from '../api/client'
 import type { Evidence, OpportunityDetail, ScoreBreakdown as Breakdown } from '../api/types'
+import ActionBar from '../components/ActionBar'
 import AiJudgement from '../components/AiJudgement'
 import DisclaimerBanner from '../components/DisclaimerBanner'
 import EvidenceDrawer from '../components/EvidenceDrawer'
@@ -32,16 +33,22 @@ export function OpportunityPage() {
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [focusEvidence, setFocusEvidence] = useState<number[]>([])
 
-  useEffect(() => {
+  const reload = useCallback(async () => {
     if (!Number.isFinite(opportunityId)) return
-    Promise.all([api.opportunity(opportunityId), api.scoreBreakdown(opportunityId)])
-      .then(([detailResult, breakdownResult]) => {
-        setDetail(detailResult.data)
-        setBreakdown(breakdownResult.data)
-        setOffline(detailResult.meta.offline || breakdownResult.meta.offline)
-      })
-      .catch((err: unknown) => setError(err instanceof ApiError ? err.message : String(err)))
+    const [detailResult, breakdownResult] = await Promise.all([
+      api.opportunity(opportunityId),
+      api.scoreBreakdown(opportunityId),
+    ])
+    setDetail(detailResult.data)
+    setBreakdown(breakdownResult.data)
+    setOffline(detailResult.meta.offline || breakdownResult.meta.offline)
   }, [opportunityId])
+
+  useEffect(() => {
+    reload().catch((err: unknown) =>
+      setError(err instanceof ApiError ? err.message : String(err)),
+    )
+  }, [reload])
 
   const allEvidence = useMemo<Evidence[]>(() => {
     if (!detail) return []
@@ -179,6 +186,13 @@ export function OpportunityPage() {
           </div>
         </section>
       )}
+
+      {/* ①b 我可以做什么 —— 状态机的合法迁移直接变成按钮 */}
+      <ActionBar
+        opportunityId={opportunityId}
+        status={detail.card.status}
+        onDone={reload}
+      />
 
       {/* ②b AI 判断 —— 规格 §44：AI 负责解释，不替用户决策 */}
       <section className="panel p-3 space-y-2">

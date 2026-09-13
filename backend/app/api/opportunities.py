@@ -30,6 +30,7 @@ from app.models.enums import (
 from app.models.evidence import Evidence
 from app.models.events import Event
 from app.pipeline.facts_builder import build_financial_facts
+from app.pipeline.auto_learn import apply_user_action
 from app.models.opportunity import (
     Opportunity,
     OpportunityScore,
@@ -311,18 +312,64 @@ def record_action(
         reason_thesis_types=request.reason_thesis_types,
     ))
 
+    # ★ 每个操作都必须有**可见且持久**的效果。
+    #
+    # 踩过的坑：``ignored`` 原先只写一条 UserAction、状态一动不动 ——
+    # 点了跟没点一样（用户会认为按钮是摆设）。
+    # 现在每个操作都映射到一个合法状态迁移，并返回实际发生了什么。
+    target_by_action: dict[UserActionKind, OpportunityStatus] = {
+        UserActionKind.CONFIRMED: OpportunityStatus.TRACKING,
+        UserActionKind.TRACKED: OpportunityStatus.TRACKING,
+        UserActionKind.IGNORED: OpportunityStatus.ARCHIVED,
+    }
+    target = target_by_action.get(action)
     new_status = str(opportunity.status)
-    if action is UserActionKind.CONFIRMED or action is UserActionKind.TRACKED:
-        target = OpportunityStatus.TRACKING
-        if _can_transition(OpportunityStatus(opportunity.status), target):
-            _append_status(session, opportunity, target, reason=f"用户操作：{action.value}")
-            new_status = target.value
+    status_changed = False
+
+    if target is not None and not _can_transition(OpportunityStatus(opportunity.status), target):
+        # 已经是目标状态 → 不是错误，如实告知（重复点击不该报错）
+        if str(opportunity.status) == target.value:
+            return ok({
+                "action": action.value,
+                "previous_status": str(opportunity.status),
+                "new_status": new_status,
+                "status_changed": False,
+                "learned": None,
+                "message": f"该机会已经处于「{target.value}」，无需重复操作",
+            })
+        raise RuleViolation(
+            f"当前状态 {opportunity.status} 不允许执行「{action.value}」",
+            {"allowed_targets": sorted(
+                s.value for s in ALLOWED_STATUS_TRANSITIONS.get(
+                    OpportunityStatus(opportunity.status), set()
+                )
+            )},
+        )
+
+    if target is not None:
+        _append_status(session, opportunity, target, reason=f"用户操作：{action.value}")
+        new_status = target.value
+        status_changed = True
+
+    # ★ 反馈闭环：把这次操作真正用于调整画像权重。
+    #   原先的提示语承诺「将用于优化你的画像」，但**没有任何代码消费 UserAction** ——
+    #   那是一条假承诺，比没有提示更糟。
+    learned = apply_user_action(
+        session, int(profile.id or 0), action, opportunity, commit=False,
+    )
 
     session.commit()
+    message = f"状态已更新为「{new_status}」" if status_changed else "已记录你的查看"
+    if learned is not None:
+        message += (f"；画像权重已调整（{learned['display_name']} "
+                    f"{learned['before']:.3f} → {learned['after']:.3f}）")
     return ok({
         "action": action.value,
+        "previous_status": None,
         "new_status": new_status,
-        "message": "已记录，将用于优化你的画像（你可以随时手动覆盖，M1-06）",
+        "status_changed": status_changed,
+        "learned": learned,
+        "message": message,
     })
 
 

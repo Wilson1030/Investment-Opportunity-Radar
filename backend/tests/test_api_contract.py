@@ -276,7 +276,12 @@ def test_profile_has_no_risk_appetite_tiers(client):
     assert "risk_tolerance" not in data or data.get("risk_tolerance") is None
     assert set(data) >= {"markets", "horizon", "exclusions", "locked_weights",
                          "auto_learn_enabled", "available_templates"}
-    assert len(data["available_templates"]) == 5
+    # ★ 不写死模板数量：新增模板（如「全景均衡」）不该让这条测试失败。
+    #   这里守的是「模板列表来自 registry 且非空」。
+    from app.strategies.registry import STRATEGY_TEMPLATES
+
+    assert set(data["available_templates"]) == set(STRATEGY_TEMPLATES)
+    assert data["available_templates"], "至少要有一个可用模板"
 
 
 def test_profile_weights_lists_all_ten_strategies(client):

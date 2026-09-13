@@ -19,8 +19,10 @@ const src = resolve(here, '..', 'src').replace(/\\/g, '/')
 
 const entry = `
 import { renderToStaticMarkup } from 'react-dom/server'
+import { createElement } from 'react'
 import { FinancialsPanel } from '${src}/components/FinancialsPanel'
 import { AiJudgement } from '${src}/components/AiJudgement'
+import { ActionBar, __setStatusMachine } from '${src}/components/ActionBar'
 import { FIXTURE_DETAIL } from '${src}/api/fixtures'
 
 export const html = renderToStaticMarkup(
@@ -42,6 +44,34 @@ export const ai = renderToStaticMarkup(
     divergenceFlagged: aiCard.divergence_flagged,
   }),
 )
+// 操作栏：待确认状态下的可用操作
+//
+// ★ 必须用 createElement 真正渲染，**不能**像上面两个纯组件那样直接调用函数 ——
+// ActionBar 用了 useState，直接调用会抛
+// 「Invalid hook call / Cannot read properties of null (reading 'useState')」。
+// （FinancialsPanel 与 AiJudgement 是无状态纯组件，才能那样调。）
+// 注入与后端一致的状态机（真实运行时由 /api/health 提供）
+__setStatusMachine({
+  discovered: ['archived', 'pending_confirmation'],
+  pending_confirmation: ['archived', 'invalidated', 'tracking'],
+  tracking: ['archived', 'invalidated', 'thesis_confirmed'],
+  thesis_confirmed: ['invalidated', 'observing'],
+  observing: ['archived', 'invalidated'],
+  invalidated: ['archived', 'pending_confirmation', 'tracking'],
+  archived: ['pending_confirmation', 'tracking'],
+})
+
+export const actions = renderToStaticMarkup(
+  createElement(ActionBar, {
+    opportunityId: 1, status: 'pending_confirmation', onDone: () => {},
+  }),
+)
+export const actionsInvalidated = renderToStaticMarkup(
+  createElement(ActionBar, {
+    opportunityId: 1, status: 'invalidated', onDone: () => {},
+  }),
+)
+
 export const aiEmpty = renderToStaticMarkup(
   AiJudgement({
     summary: null,
@@ -77,6 +107,8 @@ const html = mod.html
 const empty = mod.empty
 const ai = mod.ai
 const aiEmpty = mod.aiEmpty
+const actions = mod.actions
+const actionsInvalidated = mod.actionsInvalidated
 
 /** 断言表：字符串必须在渲染结果里出现（或必须不出现） */
 const must = [
@@ -142,6 +174,27 @@ if (!aiEmpty.includes('待生成')) {
   failed += 1
 } else {
   console.log('  ✓ AI 叙事为空时明说待生成（不用占位文案填充）')
+}
+
+// ②c 操作栏：按钮必须真的渲染出来，且随状态变化
+if (!actions.includes('确认关注') || !actions.includes('暂时忽略')) {
+  console.error('  ✗ 待确认状态没有渲染出操作按钮')
+  failed += 1
+} else {
+  console.log('  ✓ 操作按钮（待确认 → 确认关注 / 暂时忽略）')
+}
+// 无效状态只能归档或恢复 —— 不能出现「确认关注」这种非法迁移
+if (actionsInvalidated.includes('确认关注')) {
+  console.error('  ✗ 已失效状态渲染了非法操作「确认关注」')
+  failed += 1
+} else {
+  console.log('  ✓ 操作按钮随状态机变化（失效状态不出现非法迁移）')
+}
+if (!actionsInvalidated.includes('恢复跟踪')) {
+  console.error('  ✗ 失效状态没有提供「恢复跟踪」—— 归档/失效无法撤销')
+  failed += 1
+} else {
+  console.log('  ✓ 失效状态提供「恢复跟踪」（可撤销）')
 }
 
 // ③ 全项目扫「JSX 文本里的字面 **」—— Markdown 粗体在 JSX 里不会生效，

@@ -266,6 +266,19 @@ export interface OpportunityDetail {
   disclaimer?: string
 }
 
+export interface StrategyOverviewRow {
+  thesis_type: ThesisType
+  display_name: string
+  card_count: number
+  weight: number
+  weight_ratio: number
+  /** 以下四项只在 card_count === 0 时返回 */
+  best_coverage?: number
+  best_match?: number
+  best_company?: string | null
+  reason?: string
+}
+
 export interface RadarPayload {
   profile: {
     id: number
@@ -284,6 +297,11 @@ export interface RadarPayload {
     cards: OpportunityCard[]
   }
   counts: Record<OpportunityStatus, number>
+  /** 每类已实现策略的卡片数 + 「为什么没有卡」（让「没卡」也成为有依据的结论） */
+  strategies: StrategyOverviewRow[]
+  /** 画像权重为 0、因而永远不会出卡的策略 */
+  inactive_strategies: StrategyOverviewRow[]
+  filtered_thesis_type: string | null
   recent_events: EventBrief[]
   alerts: {
     id: number

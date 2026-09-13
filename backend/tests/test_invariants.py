@@ -214,10 +214,37 @@ def test_opportunity_has_independent_time_fields():
 
 
 def test_state_machine_covers_all_statuses():
+    """状态机必须覆盖全部状态，且**不能有死胡同**。
+
+    ★ 这条原先断言 ``ARCHIVED == set()``（归档是终态）。
+    但 UI 上的按钮叫「**暂时**忽略」—— 死胡同意味着用户点错一次
+    就再也回不来，只能改数据库。所以现在归档可回到「待确认 / 跟踪」。
+
+    真正要守的约束没变：**每个状态都必须可达、且至少有出口**
+    （除初始状态外，任何状态都不能是无法进入的孤岛）。
+    """
     from app.models.enums import ALLOWED_STATUS_TRANSITIONS
 
     assert set(ALLOWED_STATUS_TRANSITIONS) == set(OpportunityStatus)
-    assert ALLOWED_STATUS_TRANSITIONS[OpportunityStatus.ARCHIVED] == set()
+
+    for status, targets in ALLOWED_STATUS_TRANSITIONS.items():
+        if status is OpportunityStatus.ARCHIVED:
+            assert targets, "归档不能是死胡同（按钮承诺了「暂时」）"
+            continue
+        assert targets, f"{status} 没有任何出口 —— 死胡同"
+
+    # 每个非初始状态都必须能从某处到达
+    reachable = {OpportunityStatus.DISCOVERED}
+    changed = True
+    while changed:
+        changed = False
+        for source, targets in ALLOWED_STATUS_TRANSITIONS.items():
+            if source in reachable and not targets <= reachable:
+                reachable |= targets
+                changed = True
+    assert reachable == set(OpportunityStatus), (
+        f"这些状态无法进入：{set(OpportunityStatus) - reachable}"
+    )
 
 
 def test_strategy_facts_has_no_db_handle():

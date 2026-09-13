@@ -8,9 +8,15 @@
 
 用法::
 
-    python tools/reset_db.py            # 停手前会先问一句
-    python tools/reset_db.py --yes      # 直接重置
-    python tools/reset_db.py --yes --seed   # 重置后跑 mock pipeline 造一组数据
+    python tools/reset_db.py                  # 停手前会先问一句
+    python tools/reset_db.py --yes            # 直接重置
+    python tools/reset_db.py --yes --seed     # 重置后跑 mock pipeline 造一组数据
+    python tools/reset_db.py --yes --stop     # 重置前先停掉占用数据库的服务
+
+★ **服务在跑时本工具会失败**（Windows 上文件被占用就删不掉）。
+踩过的坑：失败信息被重定向吞掉后，看起来像「重置成功了」，
+而实际库里旧数据还在 —— 之后的验证全部建立在旧库上。
+所以现在会**主动探测占用者**，并在没有 ``--stop`` 时给出可执行的指令。
 """
 
 from __future__ import annotations
@@ -38,8 +44,48 @@ DB = Path(DATABASE_URL.split("sqlite:///", 1)[-1])
 SIDECARS = [Path(str(DB) + s) for s in ("-wal", "-shm", "-journal")]
 
 
+SERVICE_PORTS = (8000, 5173)
+
+
 def _python() -> str:
     return sys.executable
+
+
+def _port_listeners(port: int) -> list[int]:
+    """监听该端口的进程 PID（Windows 用 netstat，POSIX 用 lsof）。"""
+    import re
+    import subprocess as sp
+
+    try:
+        if sys.platform == "win32":
+            out = sp.run(["netstat", "-ano"], capture_output=True, text=True,
+                         encoding="utf-8", errors="ignore").stdout
+            pids = set()
+            for line in out.splitlines():
+                if f":{port}" in line and "LISTENING" in line.upper():
+                    parts = line.split()
+                    if parts and parts[-1].isdigit():
+                        pids.add(int(parts[-1]))
+            return sorted(pids)
+        out = sp.run(["lsof", "-ti", f":{port}"], capture_output=True, text=True,
+                     encoding="utf-8", errors="ignore").stdout
+        return sorted(int(x) for x in re.findall(r"\d+", out))
+    except Exception:  # noqa: BLE001 - 探测失败不该阻塞流程
+        return []
+
+
+def _stop_services() -> None:
+    """停掉占用数据库的服务（后端 / 前端）。"""
+    import subprocess as sp
+
+    for port in SERVICE_PORTS:
+        for pid in _port_listeners(port):
+            print(f"  停止占用 :{port} 的进程 {pid}")
+            if sys.platform == "win32":
+                sp.run(["taskkill", "/F", "/PID", str(pid)],
+                       capture_output=True, text=True)
+            else:
+                sp.run(["kill", "-9", str(pid)], capture_output=True, text=True)
 
 
 def _run(args: list[str], cwd: Path) -> int:
@@ -51,7 +97,30 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="安全重置 SQLite 数据库")
     parser.add_argument("--yes", action="store_true", help="跳过确认")
     parser.add_argument("--seed", action="store_true", help="重置后跑 mock pipeline 造数")
+    parser.add_argument("--stop", action="store_true",
+                        help="重置前先停掉占用数据库的服务（后端 8000 / 前端 5173）")
     args = parser.parse_args()
+
+    # ★ 先探测占用者。服务在跑时删除必然失败，早失败比删一半好。
+    busy: list[tuple[int, int]] = [
+        (port, pid) for port in SERVICE_PORTS for pid in _port_listeners(port)
+    ]
+    if busy:
+        print("检测到正在运行的服务：")
+        for port, pid in busy:
+            print(f"  :{port}  PID {pid}")
+        if args.stop:
+            _stop_services()
+            import time
+            time.sleep(2)
+        else:
+            print(
+                "\n数据库文件被这些进程占用，Windows 上无法删除 —— 重置会失败。\n"
+                "  加 --stop 让本工具先停掉它们：\n"
+                "    python tools/reset_db.py --yes --stop\n"
+                "  或手动停：taskkill /F /PID <PID>"
+            )
+            return 2
 
     if not args.yes:
         answer = input(f"将删除 {DB.name}（及其 -wal/-shm）并重建表结构。继续？[y/N] ")
@@ -75,6 +144,16 @@ def main() -> int:
                     "  Windows 查占用端口：netstat -ano | findstr :8000"
                 )
                 return 2
+    # ★ 校验：文件真的没了才算删成功。
+    #   踩过的坑：占用导致 unlink 静默失败时，后续步骤照跑，
+    #   而库里旧数据还在 —— 之后的验证全部建立在旧库上。
+    leftovers = [p.name for p in [DB, *SIDECARS] if p.exists()]
+    if leftovers:
+        print(
+            f"\n⚠ 这些文件仍存在（删除失败）：{leftovers}\n"
+            "  多半是还有进程占用。加 --stop 重试，或手动结束进程后重试。"
+        )
+        return 2
     print(f"已删除：{removed or '（无文件）'}")
 
     # 3) 重建（两个迁移一起应用）

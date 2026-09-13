@@ -103,7 +103,11 @@ async function requestOrFixture<T>(
 export const api = {
   health: () => request<Record<string, unknown>>('/health'),
 
-  radar: () => requestOrFixture<RadarPayload>('/radar', FIXTURE_RADAR),
+  radar: (thesisType?: string | null) =>
+    requestOrFixture<RadarPayload>(
+      thesisType ? `/radar?thesis_type=${encodeURIComponent(thesisType)}` : '/radar',
+      FIXTURE_RADAR,
+    ),
 
   opportunities: (params: Record<string, string> = {}) => {
     const query = new URLSearchParams(params).toString()

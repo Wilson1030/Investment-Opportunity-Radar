@@ -239,5 +239,16 @@ ALLOWED_STATUS_TRANSITIONS: dict[OpportunityStatus, set[OpportunityStatus]] = {
         OpportunityStatus.PENDING_CONFIRMATION,
         OpportunityStatus.TRACKING,
     },
-    OpportunityStatus.ARCHIVED: set(),
+    # ★ 归档必须**可撤销**。
+    #
+    # 原先 ``ARCHIVED: set()`` 是死胡同 —— 而 UI 上的按钮叫「**暂时**忽略」。
+    # 用户点错一次就再也回不来了，只能去改数据库。
+    # 「暂时」是一个承诺，状态机必须兑现它：
+    #   · 改主意 → 回到「跟踪」或「待确认」
+    #   · 但**不能**直接跳到「已确认 / 观察中」—— 那等于跳过确认流程，
+    #     把「我曾经不想看它」这件事抹掉（与 INVALIDATED 的纠错边同理）
+    OpportunityStatus.ARCHIVED: {
+        OpportunityStatus.PENDING_CONFIRMATION,
+        OpportunityStatus.TRACKING,
+    },
 }

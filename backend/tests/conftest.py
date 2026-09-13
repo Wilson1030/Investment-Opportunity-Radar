@@ -392,6 +392,17 @@ def pipeline_outcome(session, engine):
     from app.pipeline.runner import PipelineOptions, run_pipeline
 
     del session
+    # ★ 显式固定画像为「重组猎手」，让这条端到端测试**只测流水线机制**。
+    #
+    # 踩过的坑：默认画像改成「全景均衡」（覆盖 10 类策略）之后，
+    # 同一批 mock 公司命中的策略变多、卡片数从 3 变成 7，
+    # 而这里几条测试写死了 3 —— 它们本来是测「链路写全 / 幂等 / 可观测」的，
+    # 却因为「实现了几个策略」而失败。机制测试不该耦合策略数量。
+    from app.pipeline import profile_seed
+
+    with Session(engine) as s:
+        profile = profile_seed.get_or_create_default_profile(s, template=None)
+        profile_seed.apply_template(s, profile, "重组猎手")
     return run_pipeline(PipelineOptions(source="mock", stage="full", limit=None))
 
 

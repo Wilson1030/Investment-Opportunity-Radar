@@ -932,6 +932,42 @@ def designed_types() -> tuple[ThesisType, ...]:
 # 预设策略模板（规格 §5.1 ~ §5.5）
 # --------------------------------------------------------------------------- #
 STRATEGY_TEMPLATES: dict[str, dict[ThesisType, float]] = {
+    # ★ 默认模板：**覆盖全部 10 类策略**。
+    #
+    # 为什么必须有一个全覆盖的默认模板（踩到的实际问题）：
+    # 原先默认是「重组猎手」，它只给 5 类策略配了权重。
+    # 另外 5 类（行业周期 / 成长 / 政策 / 技术突破 / 价值发现）权重为 0 →
+    # ``profile_weight_ratio`` = 0 → 匹配度 = 0 → 被建卡门槛拒绝 →
+    # **它们永远出不了卡**，而且界面上没有任何提示。
+    #
+    # 用户的原话：「剩下几个什么价值投资之类的呢，这些都没有加入啊」——
+    # 系统实现得好好的，但用户看不到，等于没实现。
+    # 专项模板（重组猎手 / 困境反转…）保留给明确知道自己要找什么的用户。
+    # ★ 权重必须**完全相等**，这不是偷懒，是机制要求。
+    #
+    # ``match_score = 100 × (w / w_max) × coverage``。
+    # 若给 10 类策略不同的权重，权重低于最大值一半的策略
+    # 需要**两倍以上**的覆盖率才能过匹配度门槛 ——
+    # 实测 value 权重 0.07（最大值 0.13）时覆盖率达 0.47 仍被挡
+    # （匹配度 25.3 < 30），即「用户有点在乎，但永远看不到」。
+    #
+    # 等权之后 ratio = 1.0，匹配度 = 100 × coverage，
+    # 于是真正的门槛回到**覆盖率（逻辑强度）**——
+    # 这才是它应该回答的问题：「这个逻辑站得住吗」，
+    # 而不是「你对它够不够在乎」。
+    # 专项模板（重组猎手等）仍然保留差异化权重，那时匹配度门槛就该起作用。
+    "全景均衡": {
+        ThesisType.RESTRUCTURING: 0.10,
+        ThesisType.TURNAROUND: 0.10,
+        ThesisType.EVENT_DRIVEN: 0.10,
+        ThesisType.MA_INTEGRATION: 0.10,
+        ThesisType.SHAREHOLDER_ACTION: 0.10,
+        ThesisType.POLICY: 0.10,
+        ThesisType.CYCLE: 0.10,
+        ThesisType.GROWTH: 0.10,
+        ThesisType.PRODUCT: 0.10,
+        ThesisType.VALUE: 0.10,
+    },
     "重组猎手": {
         ThesisType.RESTRUCTURING: 0.40,
         ThesisType.MA_INTEGRATION: 0.25,

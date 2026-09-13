@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, timezone
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlmodel import Session, func, select
 
 from app.api import serializers
@@ -19,6 +19,7 @@ from app.api.deps import (
     profile_weights,
 )
 from app.api.envelope import DISCLAIMER, ok
+from app.api.strategy_overview import strategy_overview
 from app.models.audit import IngestRun
 from app.models.enums import OpportunityStatus, ReliabilityLevel
 from app.models.evidence import Evidence
@@ -34,7 +35,13 @@ DEFAULT_CARD_LIMIT = 6
 
 
 @router.get("/radar")
-def radar(session: Session = Depends(get_session)) -> dict:
+def radar(
+    thesis_type: str | None = Query(
+        default=None,
+        description="只看某一类投资逻辑（留空 = 全部已关注的策略）",
+    ),
+    session: Session = Depends(get_session),
+) -> dict:
     profile = get_or_create_default_profile(session)
     weights = profile_weights(session, int(profile.id or 0))
 
@@ -56,8 +63,15 @@ def radar(session: Session = Depends(get_session)) -> dict:
         ).one()
     )
 
-    # 今日机会卡（按规则分降序）
-    cards = _cards(session, profile.id, limit=DEFAULT_CARD_LIMIT)
+    # 今日机会卡（按规则分降序；可按投资逻辑筛选）
+    cards = _cards(session, profile.id, limit=DEFAULT_CARD_LIMIT, thesis_type=thesis_type)
+
+    # ★ 策略全景：**每一类策略都要有交代**。
+    #
+    # 实现了 10 类策略却只出 4 类卡时，用户看到的是「剩下 6 类没加入」——
+    # 而真相可能是「这批候选公司里没有符合那 6 类逻辑的标的」。
+    # 不解释的话，用户只能认为它们没实现（用户的原话就是这样）。
+    overview = strategy_overview(session, int(profile.id or 0), weights)
 
     # 最近重要事件
     recent_events = session.exec(
@@ -100,6 +114,13 @@ def radar(session: Session = Depends(get_session)) -> dict:
             "cards": cards,
         },
         "counts": counts,
+        #: 每类策略的卡片数与「为什么没有卡」
+        "strategies": overview,
+        #: 画像权重为 0、因而**永远不会出卡**的策略（必须显式告知）
+        "inactive_strategies": [
+            item for item in overview if item["weight"] <= 0
+        ],
+        "filtered_thesis_type": thesis_type,
         "recent_events": [serializers.event_brief(e) for e in recent_events],
         "alerts": [serializers.alert_detail(a) for a in alerts],
         "pipeline": {
@@ -142,12 +163,23 @@ ACTIVE_STATUSES: tuple[OpportunityStatus, ...] = (
 )
 
 
-def _cards(session: Session, profile_id: int | None, limit: int = 6) -> list[dict]:
-    rows = session.exec(
+def _cards(
+    session: Session, profile_id: int | None, limit: int = 6,
+    thesis_type: str | None = None,
+) -> list[dict]:
+    statement = (
         select(Opportunity)
         .where(Opportunity.profile_id == profile_id)
         .where(Opportunity.status.in_([s.value for s in ACTIVE_STATUSES]))  # type: ignore[attr-defined]
-        .order_by(Opportunity.rule_score.desc())  # type: ignore[attr-defined]
+    )
+    if thesis_type:
+        # ★ 按投资逻辑筛选：用户可以只看「价值发现」或「困境反转」。
+        #   实现 10 类策略后，不筛选的话低分策略永远排在 6 张卡的窗口之外。
+        statement = statement.join(
+            Thesis, Thesis.id == Opportunity.thesis_id  # type: ignore[arg-type]
+        ).where(Thesis.thesis_type == thesis_type)
+    rows = session.exec(
+        statement.order_by(Opportunity.rule_score.desc())  # type: ignore[attr-defined]
         .limit(limit)
     ).all()
     if not rows:

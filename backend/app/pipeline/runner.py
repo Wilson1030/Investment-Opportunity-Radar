@@ -58,7 +58,13 @@ from app.ingest.cninfo import CninfoAdapter
 from app.ingest.normalizer import upsert_announcement, upsert_company
 from app.models.audit import IngestRun
 from app.models.events import Event
-from app.models.knowledge import Announcement, Company, Paragraph, Stock
+from app.models.knowledge import (
+    Announcement,
+    Company,
+    FinancialPeriod,
+    Paragraph,
+    Stock,
+)
 from app.pipeline import event_writer, mock_source, opportunity_builder, profile_seed
 from app.pipeline.opportunity_builder import OpportunityBuildResult, build_opportunities
 
@@ -74,7 +80,10 @@ POOL_COMPANY = "company"
 
 @dataclass
 class PipelineOptions:
-    stage: str = "full"                     # full | incremental | rescore
+    #: 阶段（三个值必须**真的不同** —— 见 STAGE_CHOICES 的说明）
+    stage: str = "full"
+    #: 显式要求「即使 rescore 也跑 AI 分析」
+    force_ai_analysis: bool = False
     dry_run: bool = True
     limit: int | None = None
     scope: str = settings.ingest_scope
@@ -171,6 +180,18 @@ def run_pipeline(options: PipelineOptions | None = None) -> PipelineOutcome:
         options.searchkey = settings.ingest_searchkey
     if options.with_ai_analysis is True:
         options.with_ai_analysis = settings.with_ai_analysis
+    # ★ rescore 默认**不跑 AI 分析**：它的用途是「用当前规则与已累积的事实重算」，
+    #   纯规则计算（毫秒级）。加上 AI 就变成几百次 LLM 调用 ——
+    #   实测一次 rescore 因此跑超过 15 分钟仍未结束。
+    #   已有卡的叙事都在节点缓存里，不会因此丢失。
+    #   确实想顺便补 AI 分析时显式加 --ai-analysis（或 --with-ai）。
+    if options.stage == STAGE_RESCORE and not options.force_ai_analysis:
+        options.with_ai_analysis = False
+    # ★ incremental 用更短的采集窗口（增量语义），其余按配置。
+    #   原先三个阶段行为完全相同 —— ``--stage incremental`` 与 ``full``
+    #   跑出来一模一样，那个参数就是个摆设。
+    if options.lookback_days is None and options.stage == STAGE_INCREMENTAL:
+        options.lookback_days = INCREMENTAL_LOOKBACK_DAYS
     options.lookback_days = options.lookback_days or settings.ingest_lookback_days
     if options.max_input_chars:
         settings.llm_max_input_chars = options.max_input_chars
@@ -201,7 +222,13 @@ def run_pipeline(options: PipelineOptions | None = None) -> PipelineOutcome:
         report.quality.field_missing_rate = 0.0
         del weights  # 权重在 build_opportunities 内按 profile_id 重新读取
 
-        if options.source == SOURCE_MOCK:
+        if options.stage == STAGE_RESCORE:
+            # ★ 不采集、不抽取：只用库里已有的事实重算机会。
+            company_ids = _companies_with_facts(session)
+            print(f"[rescore] 跳过采集；对 {len(company_ids)} 家已有事实的公司重算机会")
+            report.funnel.record("candidates", len(company_ids))
+            announcements = []
+        elif options.source == SOURCE_MOCK:
             created = mock_source.seed(session, commit=True)
             print(f"[mock] 造数完成：{created}")
             company_ids = [
@@ -904,6 +931,27 @@ def _build_analysis_runner(session: Session, options: PipelineOptions) -> NodeRu
     )
 
 
+STAGE_RESCORE = "rescore"
+STAGE_INCREMENTAL = "incremental"
+
+
+def _companies_with_facts(session: Session) -> list[int]:
+    """有事实可判的公司（有事件或有结构化财务）—— ``rescore`` 阶段的作用范围。
+
+    与 ``_build_opportunities`` 的跳过条件保持一致：
+    既没事件又没财务的公司无法评价，不该出现在重算清单里。
+    """
+    from sqlmodel import col
+
+    with_events = set(
+        session.exec(select(Event.company_id).distinct()).all()
+    )
+    with_financials = set(
+        session.exec(select(FinancialPeriod.company_id).distinct()).all()
+    )
+    return sorted({int(c) for c in (with_events | with_financials) if c is not None})
+
+
 def _build_opportunities(
     session: Session,
     options: PipelineOptions,
@@ -919,9 +967,24 @@ def _build_opportunities(
     weights = profile_seed.profile_weights(session, profile_id)
 
     for company_id in company_ids:
-        if not session.exec(
+        # ★ 跳过条件：**既没有事件、也没有财务数据**（什么都判不了）。
+        #
+        # 原先只看「有没有事件」—— 那把「没抽到事件」当成了「没什么可说」。
+        # 实测踩到：4 家候选公司有公告但事件抽取被证据闸门拒了（或受
+        # ``--llm-limit`` 限制未抽），于是**整家公司被跳过**，
+        # 而「困境反转 / 价值 / 成长 / 行业周期」这几类策略
+        # 的判断依据主要是**财务数据**（不只事件）—— 它们的覆盖率
+        # 明明够（实测南网能源 shareholder_action 覆盖 0.41 / 匹配 41），
+        # 却永远出不了卡。
+        #
+        # 现在把判断交给**证据本身**：有财务数据就能评，够不够由覆盖率门槛决定。
+        has_events = session.exec(
             select(Event.id).where(Event.company_id == company_id).limit(1)
-        ).first():
+        ).first() is not None
+        has_financials = session.exec(
+            select(FinancialPeriod.id).where(FinancialPeriod.company_id == company_id).limit(1)
+        ).first() is not None
+        if not has_events and not has_financials:
             continue
 
         results = build_opportunities(
@@ -952,7 +1015,22 @@ def _build_opportunities(
 # --------------------------------------------------------------------------- #
 # CLI
 # --------------------------------------------------------------------------- #
+#: 三个阶段（原先三者行为**完全相同**，``--stage rescore`` 从未被使用 —— 一个摆设开关）
+#:
+#:   full         采集（按 ``--lookback-days`` 窗口）+ 抽取 + 组装
+#:   incremental  采集**最近 3 天**（增量）+ 抽取 + 组装
+#:   rescore      **不采集**，只用库里已有的事实重算全部机会
+#:
+#: 为什么 ``rescore`` 是必需的：卡只在「该公司恰好是本轮候选」时才建，
+#: 而策略的证据是**跨轮累积**的 ——
+#: 实测神马电力的中标公告来自 A 轮、认证公告来自 B 轮，
+#: 两轮各自评估时覆盖率都不够（0.30），
+#: 但**累积之后**成长策略覆盖率达 0.50（早该有卡）。
+#: ``rescore`` 就是让累积起来的事实重新参与判断。
 STAGE_CHOICES = ("full", "incremental", "rescore")
+
+#: ``incremental`` 阶段的采集窗口（天）
+INCREMENTAL_LOOKBACK_DAYS = 3
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -973,7 +1051,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--llm-limit", type=int, default=3, help="本轮最多对几条公告调用 LLM")
     parser.add_argument("--extract-workers", type=int, default=1,
                         help="抽取并发度（默认 1；需服务端并行度或云端才能提速）")
-    parser.add_argument("--lookback-days", type=int, default=None)
+    parser.add_argument("--lookback-days", type=int, default=None,
+                        help="采集回看天数（incremental 阶段默认 3 天，其余默认 90 天）")
     parser.add_argument("--pool", choices=[POOL_MARKET, POOL_COMPANY], default=POOL_MARKET,
                         help="market = event-first via cninfo only (default); "
                              "company = ST list via akshare")
@@ -984,6 +1063,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--searchkey", default="",
                         help="cninfo full-text search (e.g. 重大资产重组)")
     parser.add_argument("--no-llm", action="store_true", help="只采集不抽取（调试用）")
+    parser.add_argument("--ai-analysis", action="store_true",
+                        help="rescore 阶段也跑 AI 分析（默认不跑，纯规则重算）")
     parser.add_argument("--no-ai-analysis", action="store_true",
                         help="跳过 AI 分析阶段（hunt_risk/analyze/score_semantic），只出规则分")
     args = parser.parse_args(argv)
@@ -996,6 +1077,7 @@ def main(argv: list[str] | None = None) -> int:
         source=args.source,
         with_llm=not args.no_llm,
         with_ai_analysis=not args.no_ai_analysis,
+        force_ai_analysis=args.ai_analysis,
         llm_limit=args.llm_limit,
         lookback_days=args.lookback_days,
         pool=args.pool,
