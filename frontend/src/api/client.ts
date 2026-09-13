@@ -101,6 +101,28 @@ async function requestOrFixture<T>(
 }
 
 export const api = {
+  triggerScan: (options: {
+    searchkey?: string
+    lookback_days?: number
+    live?: boolean
+    stage?: string
+    limit?: number
+    llm_limit?: number
+  }) =>
+    request<{ funnel: Record<string, number> }>('/admin/ingest', {
+      method: 'POST',
+      body: JSON.stringify({
+        stage: options.stage ?? 'full',
+        source: 'cninfo',
+        pool: 'market',
+        searchkey: options.searchkey ?? '',
+        lookback_days: options.lookback_days,
+        limit: options.limit ?? 8,
+        llm_limit: options.llm_limit ?? 4,
+        live: options.live ?? false,
+      }),
+    }),
+
   health: () => request<Record<string, unknown>>('/health'),
 
   radar: (thesisType?: string | null) =>

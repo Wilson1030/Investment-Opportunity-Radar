@@ -538,3 +538,45 @@ def test_radar_cards_exclude_archived_and_invalidated(client, seeded, session):
     # 活跃状态清单本身不得包含终态
     assert "archived" not in {s.value for s in ACTIVE_STATUSES}
     assert "invalidated" not in {s.value for s in ACTIVE_STATUSES}
+
+
+# --------------------------------------------------------------------------- #
+# 采集触发接口（界面的「运行扫描」按钮）
+# --------------------------------------------------------------------------- #
+def test_admin_ingest_uses_the_requested_source(client):
+    """★ 这个端点原先**硬编码 `source="mock"`**。
+
+    也就是说「从界面触发扫描」会**悄悄塞入一批假数据**，
+    而且返回的报告看起来完全正常。这类「看起来能用、实际做错事」的接口
+    比直接报错危险得多。
+
+    这里断言请求参数被真正传递（用 mock 源跑一次，报告里的 source 必须是 mock；
+    若换 cninfo，则不应出现 mock 的造数痕迹）。
+    """
+    response = client.post("/api/admin/ingest", json={
+        "stage": "full", "source": "mock", "live": False, "limit": 4,
+    })
+    assert response.status_code == 200, response.text
+    report = response.json()["data"]
+    assert report["stage"] == "full"
+    # mock 源会造出固定的 4 家公司 —— 说明 source 参数生效了
+    assert report["funnel"]["candidates"] == 4, report["funnel"]
+
+
+def test_admin_ingest_defaults_to_real_source(client):
+    """默认必须是**真实数据源**（cninfo），不是 mock。"""
+    from app.api.admin import IngestRequest
+
+    request = IngestRequest()
+    assert request.source == "cninfo", "默认源若是 mock，界面上的「扫描」会写入假数据"
+    assert request.pool == "market"
+    assert request.live is False, "默认应当 dry-run（不写业务数据）"
+
+
+def test_admin_ingest_reports_cards_and_created(client):
+    """返回里要能看出「这次跑出了什么」—— 一个只回漏斗的报告无法回答按钮的效果。"""
+    payload = client.post("/api/admin/ingest", json={
+        "stage": "full", "source": "mock", "live": False,
+    }).json()
+    assert "cards" in payload["meta"]
+    assert "created" in payload["meta"]

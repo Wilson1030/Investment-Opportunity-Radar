@@ -23,6 +23,7 @@ import { createElement } from 'react'
 import { FinancialsPanel } from '${src}/components/FinancialsPanel'
 import { AiJudgement } from '${src}/components/AiJudgement'
 import { ActionBar, __setStatusMachine } from '${src}/components/ActionBar'
+import { ScanPanel } from '${src}/components/ScanPanel'
 import { FIXTURE_DETAIL } from '${src}/api/fixtures'
 
 export const html = renderToStaticMarkup(
@@ -72,6 +73,10 @@ export const actionsInvalidated = renderToStaticMarkup(
   }),
 )
 
+export const scan = renderToStaticMarkup(
+  createElement(ScanPanel, { onFinished: () => {} }),
+)
+
 export const aiEmpty = renderToStaticMarkup(
   AiJudgement({
     summary: null,
@@ -109,6 +114,7 @@ const ai = mod.ai
 const aiEmpty = mod.aiEmpty
 const actions = mod.actions
 const actionsInvalidated = mod.actionsInvalidated
+const scan = mod.scan
 
 /** 断言表：字符串必须在渲染结果里出现（或必须不出现） */
 const must = [
@@ -195,6 +201,14 @@ if (!actionsInvalidated.includes('恢复跟踪')) {
   failed += 1
 } else {
   console.log('  ✓ 失效状态提供「恢复跟踪」（可撤销）')
+}
+
+// ②d 扫描面板：必须能从界面触发采集（否则用户只能去敲命令行）
+if (!scan.includes('运行扫描')) {
+  console.error('  ✗ 扫描面板没有渲染出「运行扫描」入口')
+  failed += 1
+} else {
+  console.log('  ✓ 扫描面板（可从界面触发采集）')
 }
 
 // ③ 全项目扫「JSX 文本里的字面 **」—— Markdown 粗体在 JSX 里不会生效，

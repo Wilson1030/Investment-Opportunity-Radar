@@ -4,6 +4,7 @@ import api, { ApiError } from '../api/client'
 import type { RadarPayload } from '../api/types'
 import DisclaimerBanner from '../components/DisclaimerBanner'
 import OpportunityCard from '../components/OpportunityCard'
+import ScanPanel from '../components/ScanPanel'
 import StrategyPanel from '../components/StrategyPanel'
 import { StatusBadge } from '../components/StatusBadge'
 
@@ -119,6 +120,16 @@ export function RadarPage() {
           )}
         </div>
       </section>
+
+      {/* 运行扫描 —— 本地单用户应用不该要求用户去敲命令行 */}
+      <div className="flex items-center justify-between">
+        <ScanPanel onFinished={() => load(thesisFilter)} />
+        {radar.pipeline.hint && (
+          <span className="text-2xs text-faint">
+            上次漏斗掉得最狠：<span className="num text-muted">{radar.pipeline.hint}</span>
+          </span>
+        )}
+      </div>
 
       {/* 策略全景 —— 每类逻辑都要有交代 */}
       {radar.strategies.length > 0 && (

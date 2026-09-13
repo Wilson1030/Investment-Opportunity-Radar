@@ -21,9 +21,25 @@ router = APIRouter(tags=["admin"])
 
 
 class IngestRequest(BaseModel):
+    """从界面触发一次采集。
+
+    ★ 必须有 ``source`` / ``pool`` / ``searchkey`` 这几个参数 ——
+    原先这个端点的底层包装**硬编码 ``source="mock"``**，
+    也就是说「从界面触发扫描」会**悄悄塞入一批假数据**，
+    而且返回的报告看起来完全正常。这类「看起来能用、实际做错事」的
+    接口比直接报错危险得多。
+    """
+
     stage: IngestStage = IngestStage.INCREMENTAL
+    source: str = "cninfo"          # cninfo | mock
+    pool: str = "market"            # market | company
     scope: str | None = None
-    limit: int | None = 5
+    searchkey: str = ""             # 全文检索词（留空 = 扫全市场）
+    lookback_days: int | None = None
+    market_pages: int = 10
+    limit: int | None = 8
+    llm_limit: int = 4
+    #: 是否真写库（false = dry-run，只出报告不写业务数据）
     live: bool = False
 
 
@@ -34,17 +50,29 @@ def trigger_ingest(request: IngestRequest) -> dict:
     骨架期同步执行并直接返回报告 —— 底层任务队列化属于 P2
     （docs/07 §9），这里不做假的「已受理」响应。
     """
-    from app.ingest.cli import run_ingest
+    from app.pipeline.runner import PipelineOptions, run_pipeline
 
-    report = run_ingest(
+    outcome = run_pipeline(PipelineOptions(
         stage=str(request.stage),
-        dry_run=not request.live,
+        source=request.source,
+        pool=request.pool,
+        scope=request.scope or "st_and_risk_warning",
+        searchkey=request.searchkey,
+        lookback_days=request.lookback_days,
+        market_pages=request.market_pages,
         limit=request.limit,
-        scope_name=request.scope,
-    )
+        llm_limit=request.llm_limit,
+        dry_run=not request.live,
+    ))
     return ok(
-        report.to_dict(),
-        meta={"note": "骨架期同步执行；任务队列化见 docs/07 §9（P2）"},
+        outcome.report.to_dict(),
+        meta={
+            "note": (
+                "骨架期同步执行（请求会等到跑完）；任务队列化见 docs/07 §9（P2）"
+            ),
+            "cards": outcome.report.funnel.cards,
+            "created": sum(1 for r in outcome.opportunities if r.created),
+        },
     )
 
 
