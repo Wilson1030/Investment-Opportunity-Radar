@@ -554,3 +554,54 @@ def test_openai_payload_carries_max_tokens():
         httpx.Client = original  # type: ignore[misc]
 
     assert captured["json"]["max_tokens"] == 555
+
+
+def test_cache_hits_are_recorded_in_the_run_log(engine):
+    """★ 缓存命中必须进 ``log``，否则 ``cached`` / ``cached_rate`` 永远是 0。
+
+    实测踩到：命中缓存时直接 ``return``，日志里只有真实调用 ——
+    于是「全部命中缓存」的运行会显示 ``total=0 / calls=0``，
+    看起来像什么都没跑，而实际是跑完了、只是没花钱。
+    报告也就无法解释「这次为什么这么快」。
+    """
+    from app.ai.cache import SqlNodeCache
+    from app.ai.nodes import ANALYZE
+    from app.ai.provider import ScriptedProvider
+    from app.ai.runner import NodeRunner
+    from app.ai.schemas import AnalyzeInput, EvidenceBrief
+    from app.models.enums import ReliabilityLevel
+
+    calls: list[str] = []
+
+    def responder(prompt: str) -> str:
+        calls.append(prompt)
+        return (
+            '{"summary": "测试叙事", "why_now": ["过去"], "uncertainties": [],'
+            ' "risks": [], "next_events_to_watch": [], "contradictory_evidence": []}'
+        )
+
+    payload = AnalyzeInput(
+        thesis_type="restructuring",
+        thesis_statement="测试",
+        evidence=[EvidenceBrief(id=1, reliability_level=ReliabilityLevel.A,
+                                relevant_text="原文片段内容足够长以通过闸门")],
+    )
+
+    cache = SqlNodeCache(engine)
+    first_runner = NodeRunner(provider=ScriptedProvider(responder=responder), cache=cache,
+                              model="scripted", max_attempts=1)
+    first = first_runner.run(ANALYZE, payload)
+    assert first.ok, f"首次调用应成功：{first.status}"
+
+    # 第二次：必定命中缓存
+    second_runner = NodeRunner(provider=ScriptedProvider(responder=responder), cache=cache,
+                               model="scripted", max_attempts=1)
+    second = second_runner.run(ANALYZE, payload)
+    assert second.from_cache, "第二次应当命中缓存"
+    assert len(calls) == 1, "命中缓存时不该再调用模型"
+
+    stats = second_runner.stats
+    assert stats["total"] == 1, "缓存命中也要计入 total"
+    assert stats["cached"] == 1, f"cached 应被计数，实际 {stats['cached']}"
+    assert stats["calls"] == 0, "命中缓存不算真实调用"
+    assert stats["cached_rate"] == 1.0, f"cached_rate 应非零，实际 {stats['cached_rate']}"

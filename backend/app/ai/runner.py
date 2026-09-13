@@ -121,7 +121,7 @@ class NodeRunner:
         if use_cache:
             entry = self.cache.get(node.name, input_hash, node.prompt_version)
             if entry is not None and entry.reusable:
-                return NodeRunResult(
+                result = NodeRunResult(
                     node_name=node.name,
                     status=NodeRunStatus.CACHED,
                     output=node.Output.model_validate(entry.output),
@@ -131,6 +131,16 @@ class NodeRunner:
                     model=entry.model,
                     provider=entry.provider,
                 )
+                # ★ 缓存命中也要进 log。
+                #
+                # 踩过的坑：这里原先直接 return，于是 ``stats`` 里的
+                # ``cached`` 与 ``cached_rate`` **永远是 0** ——
+                # 一对存在但不可能非零的指标。
+                # 后果是报告无法解释「这次为什么这么快」：
+                # 全部命中缓存的运行会显示 total=0 / calls=0，
+                # 看起来像「什么都没跑」，而实际是跑完了、只是没花钱。
+                self.log.append(result)
+                return result
 
         system = node.system_prompt()
         prompt = node.user_prompt(payload)
