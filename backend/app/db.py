@@ -36,7 +36,17 @@ def resolve_database_url(url: str) -> str:
 
 
 DATABASE_URL = resolve_database_url(settings.database_url)
-_connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
+
+#: SQLite 忙等超时（秒）。默认只有 5 秒 —— 而节点缓存会用自己的连接写
+#: ``llm_node_run``，若主 session 正持有写事务就会直接抛
+#: ``database is locked``（实测整条 pipeline 因此中断）。
+SQLITE_BUSY_TIMEOUT_SECONDS = 30.0
+
+_connect_args = (
+    {"check_same_thread": False, "timeout": SQLITE_BUSY_TIMEOUT_SECONDS}
+    if DATABASE_URL.startswith("sqlite")
+    else {}
+)
 engine = create_engine(DATABASE_URL, echo=False, connect_args=_connect_args)
 
 
@@ -49,6 +59,8 @@ def _set_sqlite_pragma(dbapi_connection, _connection_record) -> None:
     cursor.execute("PRAGMA foreign_keys=ON")
     cursor.execute("PRAGMA journal_mode=WAL")
     cursor.execute("PRAGMA synchronous=NORMAL")
+    # 与 connect_args 的 timeout 一致：写锁被占用时先等，而不是立刻失败
+    cursor.execute(f"PRAGMA busy_timeout={int(SQLITE_BUSY_TIMEOUT_SECONDS * 1000)}")
     cursor.close()
 
 

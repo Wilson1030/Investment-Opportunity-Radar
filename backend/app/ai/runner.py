@@ -53,6 +53,20 @@ class NodeRunResult:
         return self.status in (NodeRunStatus.OK, NodeRunStatus.CACHED) and self.output is not None
 
 
+def _safe_json_schema(model: type[BaseModel]) -> dict | None:
+    """取输出模型的 JSON Schema；失败时返回 ``None``（退化为普通 json 模式）。
+
+    部分 provider 不支持结构化输出，所以失败不能影响主流程。
+    """
+    try:
+        schema = model.model_json_schema()
+    except Exception:  # pragma: no cover - 防御
+        return None
+    if not isinstance(schema, dict) or "properties" not in schema:
+        return None
+    return schema
+
+
 def extract_json(text: str) -> Any:
     """从模型输出中提取 JSON。
 
@@ -120,6 +134,7 @@ class NodeRunner:
 
         system = node.system_prompt()
         prompt = node.user_prompt(payload)
+        output_schema = _safe_json_schema(node.Output)
         request = LlmRequest(
             prompt=prompt,
             system=system,
@@ -127,6 +142,7 @@ class NodeRunner:
             expect_json=True,
             max_output_tokens=self.max_output_tokens,
             disable_thinking=self.disable_thinking,
+            json_schema=output_schema,
             timeout_seconds=self.timeout_seconds,
         )
 
@@ -152,6 +168,7 @@ class NodeRunner:
                 last_error = f"输出包含禁用词：{'/'.join(banned.words)}"
                 if attempt <= self.ban_word_retries:
                     request = LlmRequest(
+                        json_schema=output_schema,
                         prompt=(
                             f"{prompt}\n\n【上一次输出被拒绝】原因：使用了确定性语言"
                             f"（{'、'.join(banned.words)}）。\n"
@@ -187,6 +204,7 @@ class NodeRunner:
                     last_error = f"{type(exc).__name__}: {exc}"
                 # 把错误回灌给模型 —— 这是让本机 4B 模型可用的关键手段
                 request = LlmRequest(
+                    json_schema=output_schema,
                     prompt=(
                         f"{prompt}\n\n【上一次输出不合规】错误：{str(exc)[:600]}\n"
                         "请严格按 JSON Schema 重新输出，只输出 JSON，不要任何解释文字。"

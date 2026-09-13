@@ -38,9 +38,23 @@ class PromptNode:
         )
 
     def user_prompt(self, payload: BaseModel) -> str:
+        """输入数据 + **收尾的输出指令**。
+
+        ★ 收尾指令不是装饰：小模型（如本机 qwen3:4b）在「要求 JSON 输出 +
+        输入是一大段 JSON」时，很容易**直接把输入抄回来**当结果。
+        实测 ``analyze`` 与 ``score_semantic`` 因此 6/6 校验失败
+        （``raw_output`` 里是输入数据的字段，而不是要求的字段）。
+
+        利用近位效应在最后再说一遍「你要输出什么字段、不要重复输入」，
+        对这类失败最有效。
+        """
+        fields = "、".join(self.Output.model_fields)
         return (
             "【输入数据】\n"
-            f"{json.dumps(payload.model_dump(mode='json'), ensure_ascii=False, indent=1)}"
+            f"{json.dumps(payload.model_dump(mode='json'), ensure_ascii=False, indent=1)}\n\n"
+            "【你要输出的结果】\n"
+            f"只输出一个 JSON 对象，必须且只能包含这些字段：{fields}\n"
+            "严禁把上面的输入数据原样重复一遍；严禁输出解释文字或 Markdown 代码块。"
         )
 
     # ------------------------------------------------------------------ #

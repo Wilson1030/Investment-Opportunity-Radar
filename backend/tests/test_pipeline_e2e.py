@@ -50,7 +50,8 @@ def test_pipeline_writes_the_whole_chain(pipeline_outcome, engine):
     assert counts["theses"] == 3
     assert counts["opportunities"] == 3
     assert counts["score_items"] > 20, "每个机会都必须有逐项拆解"
-    assert counts["alerts"] == 1, "失效必须产生提醒"
+    # 提醒至少包含「逻辑失效」那一条；规则分/语义分分歧大时还会额外产生分歧提醒
+    assert counts["alerts"] >= 1, "失效必须产生提醒"
 
 
 def test_funnel_reports_where_it_dropped(pipeline_outcome):
@@ -401,9 +402,26 @@ def test_next_events_to_watch_is_derived_from_ladder(pipeline_outcome, engine):
     assert opportunity is not None
     watch = opportunity.next_events_to_watch
     assert watch, "规格 §53：Next Watch 是固定字段"
-    # 当前已到「草案 + 评估」阶段 → 后续阶段（股东大会 / 监管核准）应出现
-    assert any("股东大会" in w for w in watch)
-    assert not any("草案" in w for w in watch), "已完成的阶段不该再列"
+    # 当前已到「草案 + 评估」阶段 → 后续**规则阶梯**应出现（且不含已完成阶段）
+    # 注意：AI 分析会追加 deal 特定的观察项（如「重整计划草案」），
+    # 那里面可能含「草案」二字 —— 所以只对**规则部分**做「不重复」断言。
+    from app.models.enums import ThesisType
+    from app.strategies import get_def
+
+    ladder_names = {s.stage for s in get_def(ThesisType.RESTRUCTURING).catalyst_ladder}
+    # 规则侧产出三类：阶梯阶段、未回复问询的提醒、失效后的观察项
+    rule_like = [
+        w for w in watch
+        if w in ladder_names or w == "交易所问询回复" or w.startswith("该逻辑已失效")
+    ]
+    ai_part = [w for w in watch if w not in rule_like]
+
+    assert rule_like, "规则侧应贡献观察项"
+    assert any("股东大会" in w for w in rule_like)
+    assert "进展｜草案 + 评估" not in rule_like, "已完成的阶段不该再列"
+    # ★ 顺序：规则项（确定性）在前，AI 补充项在后
+    assert watch[: len(rule_like)] == rule_like, "规则项必须排在 AI 补充项之前"
+    assert ai_part, "AI 分析应补充 deal 特定的观察项"
     # 存在未回复问询 → 必须把「交易所问询回复」放在最前
     assert watch[0] == "交易所问询回复"
 
@@ -441,10 +459,12 @@ def test_rerunning_pipeline_is_idempotent(pipeline_outcome, engine):
 
 
 def test_second_run_does_not_duplicate_alerts(pipeline_outcome, engine):
+    with Session(engine) as s:
+        before = int(s.exec(select(func.count()).select_from(Alert)).one())
     run_pipeline(PipelineOptions(source="mock", stage="incremental"))
     with Session(engine) as s:
-        alerts = int(s.exec(select(func.count()).select_from(Alert)).one())
-    assert alerts == 1, "重复运行不应重复发提醒"
+        after = int(s.exec(select(func.count()).select_from(Alert)).one())
+    assert after == before, f"重复运行不应重复发提醒：{before} → {after}"
 
 
 # --------------------------------------------------------------------------- #

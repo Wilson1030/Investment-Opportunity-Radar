@@ -40,7 +40,7 @@ from sqlmodel import Session, select
 
 from app.ai.cache import SqlNodeCache
 from app.ai.nodes import EXTRACT_EVENT
-from app.ai.provider import LlmError, build_provider
+from app.ai.provider import LlmError, ScriptedProvider, build_provider
 from app.ai.runner import NodeRunner
 from app.ai.schemas import (
     AnnouncementInput,
@@ -89,10 +89,13 @@ class PipelineOptions:
     market_pages: int = 20
     #: 单条公告送入 LLM 的最大字符数（None = 用 settings 默认值）
     max_input_chars: int | None = None
-    #: cninfo 全文检索关键词（空 = 不检索，取全市场）
+    #: cninfo 全文检索关键词（空 = 不检索，取全市场；默认读 .env 的 INGEST_SEARCHKEY）
     searchkey: str = ""
     #: 截断时最多保留多少段落（None = 用 settings 默认 14）
     max_input_paragraphs: int | None = None
+    #: 是否对入池机会跑 AI 分析（hunt_risk → analyze → score_semantic）。
+    #: 关闭后只出规则分 —— 用于调试、降级、或不想花 token 的场景。
+    with_ai_analysis: bool = True
     #: 抽取阶段的并发度。**默认 1（行为与串行完全一致）**。
     #:
     #: ★ 为什么做成可配而不是直接调大：实测 Ollama 默认**串行**处理请求，
@@ -110,6 +113,8 @@ class PipelineOutcome:
     report: funnel.PipelineReport
     opportunities: list[OpportunityBuildResult] = field(default_factory=list)
     extract_stats: dict = field(default_factory=dict)
+    #: AI 分析阶段（hunt_risk / analyze / score_semantic）的调用统计
+    analysis_stats: dict = field(default_factory=dict)
     company_ids: list[int] = field(default_factory=list)
     #: 逐条抽取结果（dry-run 的核心可读产出：让人核对 AI 判断的质量）
     extractions: list[dict] = field(default_factory=list)
@@ -132,6 +137,11 @@ class PipelineOutcome:
             for r in self.opportunities
         ]
         payload["llm"] = self.extract_stats
+        payload["llm_analysis"] = self.analysis_stats
+        payload["llm_calls_total"] = (
+            int(self.extract_stats.get("calls", 0))
+            + int(self.analysis_stats.get("calls", 0))
+        )
         payload["companies"] = len(self.company_ids)
         payload["extractions"] = self.extractions
         return payload
@@ -156,6 +166,11 @@ def effective_dry_run(options: PipelineOptions) -> bool:
 
 def run_pipeline(options: PipelineOptions | None = None) -> PipelineOutcome:
     options = options or PipelineOptions()
+    # 未显式传参时，用 .env 里的默认值（让 GitHub 用户只改 .env 就能定制）
+    if not options.searchkey:
+        options.searchkey = settings.ingest_searchkey
+    if options.with_ai_analysis is True:
+        options.with_ai_analysis = settings.with_ai_analysis
     options.lookback_days = options.lookback_days or settings.ingest_lookback_days
     if options.max_input_chars:
         settings.llm_max_input_chars = options.max_input_chars
@@ -204,8 +219,11 @@ def run_pipeline(options: PipelineOptions | None = None) -> PipelineOutcome:
         # ---------- Stage 3：事件抽取 ----------
         _extract_events(session, options, report, outcome, announcements)
 
-        # ---------- Stage 4：机会组装 ----------
-        _build_opportunities(session, options, report, outcome, company_ids, profile.id)
+        # ---------- Stage 4：机会组装（含 AI 分析）----------
+        _build_opportunities(
+            session, options, report, outcome, company_ids, profile.id,
+            analysis_runner=_build_analysis_runner(session, options),
+        )
 
         # ---------- 收尾 ----------
         report.total_ms = int((datetime.now(timezone.utc) - started).total_seconds() * 1000)
@@ -764,6 +782,38 @@ class _NoCache:
 # --------------------------------------------------------------------------- #
 # Stage 4：机会组装
 # --------------------------------------------------------------------------- #
+def _build_analysis_runner(session: Session, options: PipelineOptions) -> NodeRunner | None:
+    """为 AI 分析阶段（hunt_risk / analyze / score_semantic）构造 runner。
+
+    这三个节点都是 ``layer="analyze"``，因此走 ``ANALYZE_*`` 配置 ——
+    用户可以「抽取层用便宜/本地模型、分析层用强模型」（docs/00 D07）。
+    ``--no-ai-analysis`` 时返回 ``None``（只出规则分，用于调试与降级）。
+    """
+    if not options.with_ai_analysis:
+        return None
+    if options.source == SOURCE_MOCK:
+        # mock 源必须**完全离线且确定性** —— 否则单测会去调真实 Ollama，
+        # 既慢又不可复现（实测直接把测试跑超时）。
+        # 用脚本化 provider 覆盖「AI 结果如何落库」这一段。
+        return NodeRunner(
+            provider=ScriptedProvider(responder=mock_source.analysis_responder()),
+            cache=_NoCache(),
+            model="scripted",
+        )
+    provider_name, model, base_url, api_key = settings.llm_for("analyze")
+    provider = build_provider(provider_name, base_url, api_key)
+    print(f"[llm] 分析层 {provider_name}/{model} @ {base_url}")
+    return NodeRunner(
+        provider=provider,
+        cache=SqlNodeCache(session) if not options.dry_run else _NoCache(),
+        model=model,
+        max_attempts=settings.llm_max_attempts,
+        timeout_seconds=settings.llm_timeout_seconds,
+        max_output_tokens=settings.llm_max_output_tokens,
+        disable_thinking=settings.llm_disable_thinking,
+    )
+
+
 def _build_opportunities(
     session: Session,
     options: PipelineOptions,
@@ -771,6 +821,8 @@ def _build_opportunities(
     outcome: PipelineOutcome,
     company_ids: list[int],
     profile_id: int | None,
+    *,
+    analysis_runner: NodeRunner | None = None,
 ) -> None:
     if profile_id is None:
         return
@@ -785,13 +837,21 @@ def _build_opportunities(
         results = build_opportunities(
             session, company_id, profile_id, weights,
             dry_run=options.dry_run, commit=not options.dry_run,
+            analysis_runner=analysis_runner,
         )
+        # 注：分析阶段的统计在**循环外**汇总，见本函数末尾 ——
+        # 写在循环里会被后一家覆盖，表现为「8 次调用」而实际跑了 18 次。
         for result in results:
             if result.created or result.coverage >= opportunity_builder.MIN_COVERAGE:
                 report.funnel.increment("thesis_candidates")
             if result.created:
                 report.funnel.increment("cards")
         outcome.opportunities.extend(results)
+
+    if analysis_runner is not None:
+        # ★ 在循环外汇总：写在循环里会被后一家覆盖（实测漏报了 10 次调用）
+        outcome.analysis_stats = analysis_runner.stats
+        outcome.report.llm_ms = sum(r.latency_ms or 0 for r in analysis_runner.log)
 
 
 # --------------------------------------------------------------------------- #
@@ -829,6 +889,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--searchkey", default="",
                         help="cninfo full-text search (e.g. 重大资产重组)")
     parser.add_argument("--no-llm", action="store_true", help="只采集不抽取（调试用）")
+    parser.add_argument("--no-ai-analysis", action="store_true",
+                        help="跳过 AI 分析阶段（hunt_risk/analyze/score_semantic），只出规则分")
     args = parser.parse_args(argv)
 
     outcome = run_pipeline(PipelineOptions(
@@ -838,6 +900,7 @@ def main(argv: list[str] | None = None) -> int:
         scope=args.scope,
         source=args.source,
         with_llm=not args.no_llm,
+        with_ai_analysis=not args.no_ai_analysis,
         llm_limit=args.llm_limit,
         lookback_days=args.lookback_days,
         pool=args.pool,

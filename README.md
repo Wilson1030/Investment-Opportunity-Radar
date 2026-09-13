@@ -43,7 +43,8 @@ Investment_Opportunity_Radar/
 │   ├── 04-评分与证据链.md
 │   ├── 05-API契约.md
 │   ├── 06-策略设计总表.md      # 10 类 Thesis 的统一设计
-│   └── 07-MVP实施计划.md
+│   ├── 07-MVP实施计划.md
+│   └── 08-模型接入指南.md
 ├── backend/                   # FastAPI + SQLModel + SQLite
 │   └── app/
 │       ├── models/            # 领域实体
@@ -79,12 +80,26 @@ pip install -e backend/
 cp .env.example .env
 ```
 
-开发期默认使用**本机 Ollama**（零 API 成本）：
+开发期默认使用**本机 Ollama**（零 API 成本、公告内容不出本机）：
 
 ```bash
 ollama pull qwen3:4b
 ollama serve
 ```
+
+想换云端模型？**只改 provider 名 + 填 key**，端点已内置，不用记 base_url：
+
+```bash
+LLM_MODE=hybrid              # 抽取本地、分析云端（推荐折中）
+ANALYZE_PROVIDER=deepseek
+ANALYZE_MODEL=deepseek-reasoner
+DEEPSEEK_API_KEY=sk-xxxxxxxx
+
+# 其余已预留：zhipu(glm) / kimi(moonshot) / dashscope(qwen) / openai
+#             claude / openrouter / groq / siliconflow / minimax / custom
+```
+
+**支持的 provider 全表、成本参考、三个已知的坑** → [`docs/08-模型接入指南.md`](docs/08-模型接入指南.md)
 
 ### 3. 启动
 
@@ -138,8 +153,9 @@ cd frontend && npm install && npm run dev
 数据库 26 张业务表由 Alembic 管理（alembic upgrade head 成功）
 API    /api/health 返回 ok（26 张表 + 10 类策略注册表自检通过）
 前端   tsc --noEmit 与 vite build 均通过；后端未启动时自动降级为「离线演示数据」
-LLM    真实 Ollama qwen3:4b 抽取：合成样例 1/1 通过；真实公告 2/2 通过（60~70s/条）
-       ⇒ 80 条/日 ≈ 80~150 分钟，可夜间跑完；schema_failure_rate = 0.00
+LLM    真实 Ollama qwen3:4b 全链路：抽取 12/12、反证 6/6、叙事 6/6、语义分 6/6
+       ⇒ 单条约 7 秒（关思考后快 11 倍）；6 个机会约 1 分钟
+       ⇒ provider 全预留（13 个），只填 key 即可换云端
 抽样   15 条真实公告：证据闸门 15/15 通过、JSON 合规 0.00；
        规则层与 LLM 一致率仅 27%，但诊断出问题在**规格**（枚举边界未定义、
        INV-EV1 不允许计划中的未来事件）—— 修复后同批公告一致率 25%→75%

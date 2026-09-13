@@ -18,6 +18,8 @@
 
 from __future__ import annotations
 
+import json
+
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
@@ -442,6 +444,94 @@ __all__ = [
     "MOCK_ANNOUNCEMENTS",
     "MOCK_FINANCIALS",
     "SOURCE_NAME",
+    "paragraph_objects",
+    "pending_announcements",
+    "seed",
+    "synthesize_extraction",
+]
+
+
+# --------------------------------------------------------------------------- #
+# 确定性 AI 分析响应（让 mock 源能覆盖「含 AI 落库」的完整链路）
+# --------------------------------------------------------------------------- #
+#: 三个分析节点在 prompt 里的**特征词**（用于分派，不依赖调用顺序）
+_NODE_FINGERPRINTS: tuple[tuple[str, str], ...] = (
+    ("contradictory_evidence", "hunt_risk"),
+    ("semantic_score", "score_semantic"),
+    ("next_events_to_watch", "analyze"),
+)
+
+
+def _node_of(prompt: str) -> str:
+    for needle, node in _NODE_FINGERPRINTS:
+        if needle in prompt:
+            return node
+    return "analyze"
+
+
+def analysis_responder():
+    """返回一个按 prompt 特征词分派的确定性 responder。
+
+    **为什么需要**：AI 分析阶段接进 pipeline 后，mock 源若仍走真实 provider，
+    单测就会去调 Ollama —— 既慢又不可复现（实测直接把测试跑超时）。
+    mock 的意义是「整条链路可离线确定性回归」，包括 AI 结果**如何落库**。
+    """
+
+    def responder(prompt: str) -> str:
+        node = _node_of(prompt)
+        if node == "hunt_risk":
+            return json.dumps({
+                "contradictory_evidence": [{
+                    "kind": "regulatory",
+                    "description": "交易所已就本次事项发出问询函，回复内容尚未披露",
+                    "evidence_ids": [],
+                }],
+                "risks": ["监管问询尚未回复", "方案存在终止可能"],
+                "open_questions": ["交易标的", "监管审核结果"],
+                "no_contradiction_statement": (
+                    "已检查历史同类事项、监管问询、财务约束、质押与可交易性，"
+                    "发现上述 2 项不确定因素"
+                ),
+                "confidence_assessment": "证据支持度中等，监管问询构成主要不确定性",
+            }, ensure_ascii=False)
+        if node == "score_semantic":
+            return json.dumps({
+                # 故意与规则分拉开 6.5 分：验证分歧记录路径（阈值 20 不触发）
+                "semantic_score": 72.0,
+                "factors": [{
+                    "direction": "positive",
+                    "factor": "重整投资人为产业方而非纯财务投资人",
+                    "rationale": "产业投资人的参与通常意味着业务协同意愿",
+                    "evidence_ids": [],
+                }],
+                "rules_already_covered": [
+                    "事件类型命中", "公告数量", "ST 状态", "财务状况", "市场关注度",
+                ],
+            }, ensure_ascii=False)
+        return json.dumps({
+            "summary": (
+                "公司已披露重整相关公告，事项仍处于推进阶段。"
+                "目前交易方案与监管审核结果尚未明确，属于需要持续跟踪的机会。"
+            ),
+            "why_now": [
+                "过去：公司长期经营承压",
+                "最近：出现重整类公告",
+                "本周：披露最新进展",
+                "因此：进入关注池",
+            ],
+            "uncertainties": ["重整计划能否获批", "债权申报结果"],
+            "next_events_to_watch": ["重整计划草案", "法院裁定"],
+            "assertion_kinds": {"summary": "inference"},
+        }, ensure_ascii=False)
+
+    return responder
+
+
+__all__ = [
+    "MOCK_ANNOUNCEMENTS",
+    "MOCK_FINANCIALS",
+    "SOURCE_NAME",
+    "analysis_responder",
     "paragraph_objects",
     "pending_announcements",
     "seed",

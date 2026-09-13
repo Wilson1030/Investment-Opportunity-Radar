@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from typing import TYPE_CHECKING
 
 from sqlmodel import Session, delete, select
 
@@ -46,9 +47,13 @@ from app.models.opportunity import (
 )
 from app.models.thesis import Thesis
 from app.pipeline import facts_builder
+from app.pipeline.analysis import analyze_opportunity
 from app.pipeline.event_writer import facts_after_write
 from app.strategies import STRATEGIES, get_def, get_strategy, implemented_types
 from app.strategies.base import NotImplementedStrategy, StrategyEvaluation
+
+if TYPE_CHECKING:  # pragma: no cover
+    from app.ai.runner import NodeRunner
 
 #: 逻辑强度门槛
 MIN_COVERAGE = 0.35
@@ -81,8 +86,14 @@ def build_opportunities(
     *,
     dry_run: bool = False,
     commit: bool = True,
+    analysis_runner: "NodeRunner | None" = None,
 ) -> tuple[OpportunityBuildResult, ...]:
-    """为一家公司生成/更新全部符合门槛的机会。"""
+    """为一家公司生成/更新全部符合门槛的机会。
+
+    ``analysis_runner`` 非空时，对入池的机会跑 AI 分析链路
+    （``hunt_risk`` → ``analyze`` → ``score_semantic``）—— 见
+    :mod:`app.pipeline.analysis`。为 ``None`` 时只出规则分（用于测试与降级）。
+    """
     facts = facts_builder.build_strategy_facts(session, company_id)
     accept_early_signals = _accept_early_signals(session, profile_id)
     results: list[OpportunityBuildResult] = []
@@ -132,6 +143,7 @@ def build_opportunities(
             _build_one(
                 session, company_id, profile_id, code.value, facts_with_questions,
                 evaluation, ratio, open_questions, dry_run=dry_run, commit=commit,
+                analysis_runner=analysis_runner,
             )
         )
 
@@ -164,6 +176,7 @@ def _build_one(
     *,
     dry_run: bool,
     commit: bool,
+    analysis_runner: "NodeRunner | None" = None,
 ) -> OpportunityBuildResult:
     strategy = get_strategy(thesis_type)
     definition = get_def(thesis_type)
@@ -352,6 +365,60 @@ def _build_one(
             # counterfactual 仅用于日志可读性；Alert 本身只存 before/after
             created_at=datetime.now(timezone.utc),
         ))
+
+    # ---- AI 分析：反证 / 叙事 / 语义分（新写好的那 3 个节点）----
+    # ★ 顺序：风险 → 叙事 → 语义分。任何一步失败都不阻塞机会生成，
+    #   但会把 node_status 记下来，避免「静默降级成没有 AI 叙事」。
+    if analysis_runner is not None and not dry_run:
+        # ★ 先提交，释放 SQLite 写锁。
+        #   节点缓存用自己的连接写 llm_node_run；主 session 若仍持有未提交的
+        #   写事务，缓存那条连接会拿不到写锁 → 「database is locked」整条中断。
+        #   （这是把缓存改成独立 Session 后引入的回归，实测踩到。）
+        session.commit()
+
+        ai = analyze_opportunity(
+            session, opportunity, facts, statement, score, analysis_runner,
+            rule_next_watch=list(watch),
+        )
+        if ai.summary:
+            opportunity.summary = ai.summary
+        if ai.risks:
+            opportunity.risks = ai.risks
+        if ai.uncertainties:
+            opportunity.uncertainties = ai.uncertainties
+        if ai.next_events_to_watch:
+            opportunity.next_events_to_watch = ai.next_events_to_watch
+        if ai.contradictory_evidence_ids:
+            opportunity.contradictory_evidence_ids = ai.contradictory_evidence_ids
+        if ai.why_now:
+            opportunity.why_now = ai.why_now
+        opportunity.semantic_score = ai.semantic_score
+        opportunity.divergence = ai.divergence
+        session.add(opportunity)
+        session.flush()
+
+        # 分歧 > 20 → 提示人工复核（D08：两个分数从不同角度看同一件事）
+        # ★ 必须幂等：重复运行不该重复打扰用户（与失效/预警提醒同一条规则）
+        if ai.divergence_flagged and session.exec(
+            select(Alert).where(
+                Alert.opportunity_id == opportunity_id,
+                Alert.alert_type == "divergence_flagged",
+            )
+        ).first() is None:
+            session.add(Alert(
+                opportunity_id=opportunity_id,
+                alert_type="divergence_flagged",
+                title="规则分与语义分分歧较大",
+                message=(
+                    f"规则分 {score.rule_score:.1f} 与语义分 {ai.semantic_score:.1f} "
+                    f"相差 {ai.divergence:.1f}。可能规则未覆盖某些因素，"
+                    "也可能是模型在编造 —— 建议人工复核。"
+                ),
+                suggestion="语义分不参与排序，仅作提示",
+                score_before=score.rule_score,
+                score_after=score.rule_score,
+                created_at=datetime.now(timezone.utc),
+            ))
 
     # ---- 预警提醒（不改状态）----
     if warnings and not should_invalidate:

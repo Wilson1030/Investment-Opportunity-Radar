@@ -11,9 +11,10 @@ provider 全部预留，切换只改 ``.env``，不改任何业务代码。
 
 from __future__ import annotations
 
-import os
 from functools import lru_cache
 from pathlib import Path
+
+from typing import ClassVar
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -57,6 +58,8 @@ class Settings(BaseSettings):
     # ---------- 采集范围（D11：改这一行即可放宽到全市场）----------
     ingest_scope: str = "st_and_risk_warning"   # st_and_risk_warning | all_a_shares
     ingest_lookback_days: int = 90
+    #: cninfo 全文检索关键词（留空 = 扫全市场；填则只扫命中该词的公告）
+    ingest_searchkey: str = ""
 
     # ---------- 调度（D12：交易日感知三段式）----------
     scheduler_enabled: bool = False
@@ -66,6 +69,8 @@ class Settings(BaseSettings):
     schedule_postmarket: str = "15:30"
 
     # ---------- 行为开关 ----------
+    #: 是否对入池机会跑 AI 分析（反证检索 / 研究叙事 / 语义分）
+    with_ai_analysis: bool = True
     store_announcement_fulltext: bool = True
     enable_ocr: bool = False
 
@@ -125,11 +130,27 @@ class Settings(BaseSettings):
         for d in (self.data_dir, self.cache_dir, self.raw_dir, self.mock_dir):
             d.mkdir(parents=True, exist_ok=True)
 
+    #: 本机 Ollama 的默认端点与模型（LLM_MODE=dev 且未显式配置时使用）
+    #: 必须是 ClassVar —— 否则 pydantic 会把它当成模型字段并要求类型注解
+    DEFAULT_LOCAL_PROVIDER: ClassVar[str] = "ollama"
+    DEFAULT_LOCAL_MODEL: ClassVar[str] = "qwen3:4b"
+    DEFAULT_LOCAL_BASE_URL: ClassVar[str] = "http://127.0.0.1:11434"
+
     def llm_for(self, layer: str) -> tuple[str, str, str, str]:
         """返回 ``(provider, model, base_url, api_key)``。
 
         ``layer`` 取 ``"extract"`` 或 ``"analyze"``。
-        ``LLM_MODE=hybrid`` 时抽取层强制本地、分析层强制云端。
+
+        语义（对 GitHub 用户很重要）::
+
+            LLM_MODE=dev     未显式配置 provider 时 → 本机 Ollama（零成本、内容不出本机）
+                             但**若用户显式写了** EXTRACT_PROVIDER=deepseek，就尊重用户配置
+            LLM_MODE=cloud   一律用各层自己的配置
+            LLM_MODE=hybrid  抽取层用本地（成本、隐私），分析层用配置里的（质量）
+
+        ★ 踩过的坑：早期实现里 ``dev`` 会**无条件覆盖**成 Ollama，
+        于是用户按文档设了 ``EXTRACT_PROVIDER=deepseek`` 却仍然走本机 ——
+        属于「配置被静默忽略」，极难排查。
         """
         if layer == "extract":
             provider, model = self.extract_provider, self.extract_model
@@ -140,17 +161,19 @@ class Settings(BaseSettings):
         else:  # pragma: no cover - 调用方约束
             raise ValueError(f"unknown layer: {layer!r}")
 
-        if self.llm_mode == "dev":
-            # 开发期一律走本机 Ollama（D07）
+        explicit = bool(provider) and provider != self.DEFAULT_LOCAL_PROVIDER
+        if explicit:
+            # 用户显式选了别的 provider → 尊重（dev / cloud / hybrid 都一样）
+            return provider, model, base, key
+
+        if self.llm_mode in {"dev", "hybrid"}:
+            # 未显式配置 → 本机 Ollama
             return (
-                os.getenv("RADAR_DEV_PROVIDER", "ollama"),
-                os.getenv("RADAR_DEV_MODEL", "qwen3:4b"),
-                os.getenv("RADAR_DEV_BASE_URL", "http://127.0.0.1:11434"),
+                self.DEFAULT_LOCAL_PROVIDER,
+                model or self.DEFAULT_LOCAL_MODEL,
+                base or self.DEFAULT_LOCAL_BASE_URL,
                 "",
             )
-        if self.llm_mode == "hybrid" and layer == "analyze":
-            provider, model = self.analyze_provider, self.analyze_model
-            base, key = self.analyze_base_url, self.analyze_api_key
         return provider, model, base, key
 
 

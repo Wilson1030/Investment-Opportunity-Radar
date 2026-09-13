@@ -279,12 +279,56 @@ def _classify_payload():
 # provider 工厂
 # --------------------------------------------------------------------------- #
 def test_provider_factory_supports_all_reserved_providers():
+    """★ 为 GitHub 用户预留的全部 provider 都必须可构造。
+
+    目标：**只填 key 就能用** —— 端点由 PROVIDER_PRESETS 自动带上，
+    用户不必记住每家的 base_url。换厂商只改一个名字。
+    """
+    from app.ai.provider import PROVIDER_PRESETS, ProviderPreset
+
+    # 默认（本地）
     assert build_provider("ollama").name == "ollama"
+    assert build_provider("scripted").name == "scripted"
+
+    # 预设表里的每个 provider 都要能构造出来
+    for name, preset in PROVIDER_PRESETS.items():
+        if preset.kind == "openai_compat" and not preset.base_url:
+            continue  # custom 需要用户显式给 base_url
+        provider = build_provider(name, api_key="sk-test")
+        assert provider is not None, name
+
+    # 关键几家点名（含别名）
     assert build_provider("deepseek", api_key="sk-x").name == "deepseek"
     assert build_provider("openai", api_key="sk-x").name == "openai"
     assert build_provider("kimi", api_key="sk-x").name == "kimi"
-    assert build_provider("glm", api_key="sk-x").name == "glm"
-    assert build_provider("scripted").name == "scripted"
+    assert build_provider("moonshot", api_key="sk-x").name == "kimi"
+    assert build_provider("glm", api_key="sk-x").name == "zhipu"
+    assert build_provider("zhipu", api_key="sk-x").name == "zhipu"
+    assert build_provider("qwen", api_key="sk-x").name == "dashscope"
+    assert build_provider("claude", api_key="sk-x").name == "anthropic"
+    assert build_provider("openrouter", api_key="sk-x").name == "openrouter"
+
+    # 端点必须来自预设（用户不用记 base_url）
+    assert build_provider("deepseek", api_key="sk-x").base_url == "https://api.deepseek.com"
+    assert "bigmodel.cn" in build_provider("zhipu", api_key="sk-x").base_url
+    assert isinstance(PROVIDER_PRESETS["deepseek"], ProviderPreset)
+
+
+def test_provider_reads_api_key_from_its_preset_env_var(monkeypatch):
+    """只填 key（不写 base_url）就能用 —— key 按预设的环境变量名读取。"""
+    monkeypatch.setenv("ZHIPU_API_KEY", "sk-from-env")
+    provider = build_provider("zhipu")          # 只给名字
+    assert provider.api_key == "sk-from-env"      # type: ignore[attr-defined]
+    assert "bigmodel.cn" in provider.base_url     # type: ignore[attr-defined]
+
+
+def test_custom_provider_requires_explicit_base_url():
+    """自建/中转端点必须显式给 base_url，不能静默用错端点。"""
+    from app.ai.provider import LlmError
+
+    with pytest.raises(LlmError, match="base_url"):
+        build_provider("custom")
+    assert build_provider("custom", base_url="http://localhost:8000/v1") is not None
 
 
 def test_provider_factory_rejects_unknown():
