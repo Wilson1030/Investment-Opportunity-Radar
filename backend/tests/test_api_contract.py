@@ -474,3 +474,47 @@ def test_deep_link_degrades_safely():
         page = 2
 
     assert deep_link(_NoUrl()) == ""
+
+
+# --------------------------------------------------------------------------- #
+# 「今日机会」不得包含归档 / 失效的卡片
+# --------------------------------------------------------------------------- #
+def test_radar_cards_exclude_archived_and_invalidated(client, seeded, session):
+    """★ 归档与失效的卡不得出现在「今日机会」里。
+
+    为什么不能靠「反正它们分数低排不上」：实测归档/失效卡的分数可能**很高**
+    —— 东兴/信达的失效判定被修正后，分数从 21 升到 43.5 / 42.75，
+    直接排到全库第一、第二位。靠分数天然过滤是巧合，不是设计。
+
+    它们仍然可达：``/api/opportunities?status=archived`` 能查到，
+    也在 ``counts`` 里可见；失效另有**提醒**通道（规格 §23）。
+    """
+    from app.api.radar import ACTIVE_STATUSES
+    from app.models.opportunity import Opportunity
+
+    card = session.get(Opportunity, seeded["opportunity_id"])
+    assert card is not None
+
+    # 把种子卡推到一个非活跃状态，并给它一个足够高的分数让它「本该」排第一
+    card.status = "archived"
+    card.rule_score = 99.9
+    session.add(card)
+    session.commit()
+
+    data = client.get("/api/radar").json()["data"]
+    ids = [c["id"] for c in data["today"]["cards"]]
+    assert seeded["opportunity_id"] not in ids, "归档的卡出现在了今日机会里"
+
+    # 但它必须仍然可查（不能是「藏起来」）
+    found = client.get("/api/opportunities?status=archived").json()["data"]
+    items = found["items"] if isinstance(found, dict) else found
+    assert any(item["id"] == seeded["opportunity_id"] for item in items), (
+        "归档的卡在 /api/opportunities 里也查不到了 —— 这不是过滤，是丢失"
+    )
+
+    # counts 里也要如实反映
+    assert data["counts"].get("archived", 0) >= 1
+
+    # 活跃状态清单本身不得包含终态
+    assert "archived" not in {s.value for s in ACTIVE_STATUSES}
+    assert "invalidated" not in {s.value for s in ACTIVE_STATUSES}

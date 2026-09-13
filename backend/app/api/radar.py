@@ -123,10 +123,30 @@ def _drop_hint(run: IngestRun | None) -> str | None:
     return counters.drop_at()
 
 
+#: 「今日机会」只列**活跃**机会。
+#:
+#: ★ 归档与失效都不算「机会」：
+#:   · ARCHIVED = 终态（用户/系统已判定它不再值得关注）
+#:   · INVALIDATED = 投资逻辑已死（它的对客通道是**失效提醒**，不是机会列表）
+#:
+#: 为什么必须是显式过滤而不是「反正分数低排不上」：
+#: 实测归档/失效卡的分数可能**很高**（东兴/信达修正后 43.5 / 42.75，
+#: 排到全库第一、第二位）—— 靠分数天然过滤是巧合，不是设计。
+#: 它们仍可通过 ``/api/opportunities?status=...`` 查到，也在 counts 里可见。
+ACTIVE_STATUSES: tuple[OpportunityStatus, ...] = (
+    OpportunityStatus.DISCOVERED,
+    OpportunityStatus.PENDING_CONFIRMATION,
+    OpportunityStatus.TRACKING,
+    OpportunityStatus.THESIS_CONFIRMED,
+    OpportunityStatus.OBSERVING,
+)
+
+
 def _cards(session: Session, profile_id: int | None, limit: int = 6) -> list[dict]:
     rows = session.exec(
         select(Opportunity)
         .where(Opportunity.profile_id == profile_id)
+        .where(Opportunity.status.in_([s.value for s in ACTIVE_STATUSES]))  # type: ignore[attr-defined]
         .order_by(Opportunity.rule_score.desc())  # type: ignore[attr-defined]
         .limit(limit)
     ).all()
