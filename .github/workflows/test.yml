@@ -1,0 +1,77 @@
+name: tests
+
+# 每次 push / PR 自动跑：
+#   · 后端 636 个测试（不联网、不需要 Ollama —— 测试全用 ScriptedProvider）
+#   · 前端类型检查 + 真实渲染自检 + 生产构建
+#
+# ★ 为什么 CI 对这个项目特别重要：
+# 本项目反复出现的一类 bug 是「看起来能用、实际没接上」
+# （按钮是摆设、开关不分支、指标恒为 0）。那类问题**不会让测试变红**，
+# 只会静静地给出错结论。所以 CI 里额外跑了「渲染自检」——
+# 它真的渲染组件再断言内容，能抓到 tsc 与 build 都抓不到的问题
+# （例如「关注之后没有取消按钮」）。
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+# 同一分支的新推送取消上一次运行，省额度
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: 后端测试
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      # 只装核心依赖 + dev（不装采集层）—— 测试不需要 akshare/pandas，
+      # 装了只会让 CI 慢几分钟。
+      # ★ 必须带 ".[dev]"：pytest 在 dev extra 里，
+      #   只写 "-e ./backend" 会在「跑测试」那一步报 No module named pytest
+      #   （实测踩到：先写了不带 dev 的版本，在干净 venv 里跑才发现）。
+      - name: 安装依赖
+        run: pip install -e "./backend[dev]"
+
+      - name: 跑测试
+        working-directory: backend
+        run: python -m pytest -q
+
+  frontend:
+    name: 前端检查
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: 安装依赖
+        working-directory: frontend
+        run: npm ci
+
+      - name: 类型检查
+        working-directory: frontend
+        run: npx tsc --noEmit
+
+      # ★ 这一步是本项目特有的：真的把组件渲染成 HTML 再断言内容。
+      # tsc 通过只说明类型对、build 通过只说明能打包 ——
+      # 都不能证明「数据被渲染出来了」「按钮真的随状态变了」。
+      - name: 渲染自检
+        working-directory: frontend
+        run: npm run render:check
+
+      - name: 生产构建
+        working-directory: frontend
+        run: npm run build

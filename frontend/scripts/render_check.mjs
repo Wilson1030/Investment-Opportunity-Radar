@@ -295,6 +295,29 @@ if (cardPending === cardTracking || cardTracking === cardArchived) {
   }
 }
 
+// ②g ★ 状态机的加载必须由**应用级**触发，不能只挂在某一个组件上
+//
+// 实测踩到（看真实截图才发现的）：只有详情页的 ActionBar 会加载状态机，
+// 于是**用户没进过详情页时，雷达首页的卡片一个操作按钮都没有**，
+// 只显示「状态机未加载，暂不提供操作」。
+// 这类 bug 渲染自检抓不到（自检里是显式注入状态机的）——
+// 所以这里改为检查「谁负责触发加载」这个**契约**。
+{
+  const cardSrc = readFileSync(
+    resolve(here, '..', 'src', 'components', 'CardActions.tsx'), 'utf8',
+  )
+  const appSrc = readFileSync(resolve(here, '..', 'src', 'App.tsx'), 'utf8')
+  if (!cardSrc.includes('ensureMachine')) {
+    console.error('  ✗ CardActions 没有触发状态机加载 —— 没进过详情页时卡片上没有按钮')
+    failed += 1
+  } else if (!appSrc.includes('ensureMachine')) {
+    console.error('  ✗ App 没有在启动时加载状态机 —— 按钮要等用户碰对页面才出现')
+    failed += 1
+  } else {
+    console.log('  ✓ 状态机由应用级加载，卡片也各自兜底（按钮不会缺席）')
+  }
+}
+
 // ③ 全项目扫「JSX 文本里的字面 **」—— Markdown 粗体在 JSX 里不会生效，
 //    会原样显示成星号（实测抓到 3 处）。用 <b> 才是对的。
 const literalMarks = []

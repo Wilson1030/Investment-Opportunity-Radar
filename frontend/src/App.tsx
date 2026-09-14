@@ -1,4 +1,7 @@
+import { useEffect } from 'react'
 import { NavLink, Outlet } from 'react-router-dom'
+
+import { ensureMachine } from './lib/actions'
 
 const NAV = [
   { to: '/', label: 'Radar', hint: '今日机会' },
@@ -9,6 +12,11 @@ const NAV = [
 
 /** 应用外壳：顶部状态条 + 左侧导航 + 内容区 */
 export function App() {
+  // ★ 应用级加载一次状态机：卡片的操作按钮依赖它
+  useEffect(() => {
+    void ensureMachine()
+  }, [])
+
   return (
     <div className="min-h-full flex flex-col">
       <header className="sticky top-0 z-30 border-b border-border bg-bg/95 backdrop-blur">

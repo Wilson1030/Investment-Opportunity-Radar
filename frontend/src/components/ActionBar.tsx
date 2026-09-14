@@ -13,29 +13,12 @@ import { useEffect, useState } from 'react'
 import api, { ApiError } from '../api/client'
 import {
   actionsFor,
+  ensureMachine,
   isMachineLoaded,
-  setStatusMachine,
   STATUS_LABEL,
   statusHint,
   type ActionSpec,
 } from '../lib/actions'
-
-let machineRequested = false
-
-/** 从后端取状态机（只取一次，全应用共享） */
-async function ensureMachine(): Promise<void> {
-  if (isMachineLoaded() || machineRequested) return
-  machineRequested = true
-  try {
-    const { data } = await api.health()
-    setStatusMachine(data.status_machine)
-  } catch {
-    // 拿不到状态机 → 不给任何改状态的按钮（宁可少给，不给错的）
-    setStatusMachine()
-  }
-}
-
-export { ensureMachine }
 
 export function ActionBar({
   opportunityId,

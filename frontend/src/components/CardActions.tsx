@@ -13,9 +13,15 @@
  * 并且**撤销类操作**（取消关注 / 恢复关注 / 归档）用不同样式标出来，
  * 让用户一眼看到退路在哪。
  */
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import api, { ApiError } from '../api/client'
-import { actionsFor, STATUS_LABEL, type ActionSpec } from '../lib/actions'
+import {
+  actionsFor,
+  ensureMachine,
+  isMachineLoaded,
+  STATUS_LABEL,
+  type ActionSpec,
+} from '../lib/actions'
 
 export function CardActions({
   opportunityId,
@@ -29,8 +35,16 @@ export function CardActions({
   const [busy, setBusy] = useState(false)
   const [result, setResult] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [ready, setReady] = useState(isMachineLoaded())
 
-  const actions = actionsFor(status)
+  // ★ 必须自己触发加载：原先只有详情页会加载状态机，
+  //   于是没进过详情页时卡片上**一个操作按钮都没有**（实测截图才发现）。
+  useEffect(() => {
+    if (ready) return
+    ensureMachine().then(() => setReady(true))
+  }, [ready])
+
+  const actions = ready ? actionsFor(status) : []
 
   const run = async (action: ActionSpec) => {
     setBusy(true)

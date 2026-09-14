@@ -1,3 +1,5 @@
+import api from '../api/client'
+
 /**
  * 「当前状态下能做什么」—— 卡片与详情页**共用同一份**定义。
  *
@@ -126,4 +128,35 @@ export function statusHint(status: string): string {
     default:
       return '尚未确认，需要你判断'
   }
+}
+
+// --------------------------------------------------------------------------- //
+// 状态机的加载（唯一实现）
+// --------------------------------------------------------------------------- //
+let machinePromise: Promise<void> | null = null
+
+/**
+ * 从后端取状态机（`/api/health` 的 `status_machine`），**幂等**。
+ *
+ * ★ 为什么必须放在这里而不是某个组件里：
+ * 原先只有详情页的 `ActionBar` 会触发加载 —— 于是**用户没进过详情页时，
+ * 雷达首页的卡片一个操作按钮都没有**，只显示「状态机未加载，暂不提供操作」。
+ * 这类 bug 渲染自检抓不到（自检里是显式注入状态机的），
+ * 是**看真实截图**才发现的。
+ *
+ * 现在 `App` 启动时调一次，两个组件也各自兜底调用（幂等，不会重复请求）。
+ */
+export function ensureMachine(): Promise<void> {
+  if (machineLoaded) return Promise.resolve()
+  if (machinePromise === null) {
+    machinePromise = api
+      .health()
+      .then(({ data }) => setStatusMachine(data.status_machine))
+      .catch(() => {
+        // 拿不到状态机 → 不给任何改状态的按钮（宁可少给，不给错的）。
+        // 但要把 machineLoaded 置真，否则每次渲染都会重试。
+        setStatusMachine()
+      })
+  }
+  return machinePromise
 }

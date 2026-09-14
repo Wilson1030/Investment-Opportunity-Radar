@@ -18,6 +18,15 @@ dependencies = [
     "httpx>=0.27",
     "apscheduler>=3.10",
     "python-dateutil>=2.9",
+    # ★ HTML 公告解析（app/ingest/parcel.py）。它**不是**可选的：
+    #   代码里有正则兜底，但兜底会**静默降级** ——
+    #   跨标签的折行不再合并，段落切分变差 → 证据的页码/段落锚点变差，
+    #   而用户看到的是「跳转原文」跳不到正确位置。
+    #   实测：干净环境（只装核心依赖）跑测试时
+    #   test_parcel.py::test_html_parsing_also_joins_lines 直接失败。
+    #   体积很小，放核心依赖里避免这条静默的质量悬崖。
+    "beautifulsoup4>=4.12",
+    "lxml>=5.0",
 ]
 
 [project.optional-dependencies]
@@ -26,8 +35,6 @@ ingest = [
     "akshare>=1.12",
     "pandas>=2.2",
     "pdfplumber>=0.11",
-    "beautifulsoup4>=4.12",
-    "lxml>=5.0",
 ]
 dev = ["pytest>=8.3", "pytest-cov>=6.0", "ruff>=0.8"]
 
