@@ -61,4 +61,5 @@ logs/
 # --- 前端构建产物 ---
 frontend/dist/
 frontend/node_modules/
-frontend/.tsbuildinfo
+# TS 增量编译产物（构建产物，不该进版本库）
+*.tsbuildinfo
