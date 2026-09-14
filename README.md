@@ -6,22 +6,51 @@
 
 ---
 
-## 🚀 快速开始（一条命令）
+## 🚀 快速开始
+
+**前置要求**：Python 3.13 · Node.js 18+ · 可选 [Ollama](https://ollama.com/download)（默认模型，零 API 成本）
+
+### 1. 环境
 
 ```bash
-# 前置：conda 环境 radar 已建好、frontend 已 npm install、数据库已初始化
-python tools/reset_db.py --yes --seed      # 首次：建库（--seed 造一组离线样例）
-python tools/start_all.py                  # 启动后端 + 前端，Ctrl+C 一起停
+conda create -n radar python=3.13 -y     # 或用 venv
+conda activate radar
+pip install -e "backend/.[ingest]"       # 含采集层（akshare/pandas）；不采集可省 .[ingest]
+cd frontend && npm install && cd ..
+```
+
+### 2. 配置
+
+```bash
+cp .env.example .env      # 不改也能跑：默认走本机 Ollama
+ollama pull qwen3:4b      # 若用本机模型
+ollama serve
+```
+
+想换云端模型（DeepSeek / 智谱 / Kimi / OpenAI / Claude …共 13 家）：
+**只改 provider 名 + 填 key**，端点已内置。全表与成本参考见
+**[docs/08-模型接入指南.md](docs/08-模型接入指南.md)**。
+
+### 3. 初始化数据库
+
+```bash
+python tools/reset_db.py --yes --seed      # --seed 会造一组离线样例数据，便于立刻看到界面
+```
+
+### 4. 启动（一条命令）
+
+```bash
+python tools/start_all.py                  # 后端 + 前端一起起，Ctrl+C 一起停
 ```
 
 打开 **http://127.0.0.1:5173** 即可。启动前会自动检查解释器依赖 / 端口占用 /
-前端依赖 / 数据库文件，并给出可执行的修复提示，而不是让你对着报错猜。
+前端依赖 / 数据库文件，并给出**可执行的**修复提示，而不是让你对着报错猜。
 
-想快速接手代码：先看 **[docs/09-项目状态与交接.md](docs/09-项目状态与交接.md)** ——
-一句话状态、已验证的事实与数值、已修 bug 及其教训、代码地图。
+> 服务在跑时 `reset_db` 会因文件占用而失败（Windows 上必然）——
+> 用 `python tools/reset_db.py --yes --stop` 让它先停服务再重置。
 
-想换模型：**[docs/08-模型接入指南.md](docs/08-模型接入指南.md)** ——
-13 个 provider 预设，**只填 key 就能用**。
+想了解代码结构 / 已修过哪些坑：**[docs/09-项目状态与交接.md](docs/09-项目状态与交接.md)**
+（维护者交接文档，不是使用说明）。
 
 ---
 
@@ -81,58 +110,6 @@ Investment_Opportunity_Radar/
 │   └── raw/                   # 公告原文 PDF/HTML（gitignored）
 └── .env.example
 ```
-
----
-
-## 快速开始
-
-### 1. 环境（独立 conda 环境，与本机其他项目隔离）
-
-```bash
-conda create -n radar python=3.13 -y
-conda activate radar
-pip install -e backend/
-```
-
-### 2. 配置
-
-```bash
-cp .env.example .env
-```
-
-开发期默认使用**本机 Ollama**（零 API 成本、公告内容不出本机）：
-
-```bash
-ollama pull qwen3:4b
-ollama serve
-```
-
-想换云端模型？**只改 provider 名 + 填 key**，端点已内置，不用记 base_url：
-
-```bash
-LLM_MODE=hybrid              # 抽取本地、分析云端（推荐折中）
-ANALYZE_PROVIDER=deepseek
-ANALYZE_MODEL=deepseek-reasoner
-DEEPSEEK_API_KEY=sk-xxxxxxxx
-
-# 其余已预留：zhipu(glm) / kimi(moonshot) / dashscope(qwen) / openai
-#             claude / openrouter / groq / siliconflow / minimax / custom
-```
-
-**支持的 provider 全表、成本参考、三个已知的坑** → [`docs/08-模型接入指南.md`](docs/08-模型接入指南.md)
-
-### 3. 启动
-
-```bash
-# 后端
-conda activate radar
-cd backend && uvicorn app.main:app --reload --port 8000
-
-# 前端（另开终端）
-cd frontend && npm install && npm run dev
-```
-
-访问 http://localhost:5173
 
 ---
 

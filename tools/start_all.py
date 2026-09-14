@@ -61,8 +61,9 @@ def _check_python() -> None:
         _fail(
             f"当前 Python 缺少依赖（{exc.name}）",
             f"当前解释器：{sys.executable}\n"
-            '  请用项目环境运行：D:/Anaconda/envs/radar/python.exe tools/start_all.py\n'
-            '  或先安装：pip install -e ".[dev]"（在 backend/ 下）',
+            "  请在**已激活项目 Python 环境**的终端里运行本脚本：\n"
+            "    python tools/start_all.py\n"
+            '  或先装依赖：cd backend && pip install -e "."（采集层再装 ".[ingest]"）',
         )
 
 
