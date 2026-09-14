@@ -1,5 +1,11 @@
 # Investment Opportunity Radar · 投资机会雷达
 
+[![tests](https://github.com/Wilson1030/Investment-Opportunity-Radar/actions/workflows/test.yml/badge.svg)](https://github.com/Wilson1030/Investment-Opportunity-Radar/actions/workflows/test.yml)
+[![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![python](https://img.shields.io/badge/python-3.13-blue.svg)](https://www.python.org/)
+[![tests](https://img.shields.io/badge/tests-636%20passed-brightgreen.svg)](#10-工程现状)
+[![local-first](https://img.shields.io/badge/local--first-%E6%9C%AC%E5%9C%B0%E8%BF%90%E8%A1%8C-2DD4BF.svg)](#9-定位与边界)
+
 > 以**投资者画像**决定看什么、以**事件**为入口、以**投资逻辑（Thesis）**为组织方式、
 > 以**证据链**为可信基础、以 **AI** 为研究辅助能力的**本地个性化投资机会发现系统**。
 
